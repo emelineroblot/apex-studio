@@ -12,10 +12,12 @@ from __future__ import annotations
 import io
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from PIL import Image
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from apex.models.media import Media, PipelineEvent
@@ -24,12 +26,35 @@ from apex.pipeline import exif as exif_mod
 from apex.services.storage import (
     ObjectNotFoundError,
     StorageClient,
+    StorageError,
     content_addressed_key,
     incoming_key,
 )
 
 DERIVATIVE_HD_EXT = "jpg"
 DERIVATIVE_WEBP_EXT = "webp"
+
+# §3-F.2 : motif `exif_inconsistent` — date de déclenchement dans le futur ou antérieure à
+# 2000. `EXIF_FUTURE_TOLERANCE` absorbe un décalage d'horloge raisonnable (boîtier mal
+# réglé) sans pour autant laisser passer une date manifestement aberrante.
+EXIF_MIN_YEAR = 2000
+EXIF_FUTURE_TOLERANCE = timedelta(days=1)
+
+# Pannes d'infrastructure authentiques (§module docstring) : jamais maquillées en
+# quarantaine, elles doivent faire échouer/retenter le *job* — revue J1, 🟠
+# (« toute panne d'infrastructure devient une quarantaine terminale »). `ObjectNotFoundError`
+# est un sous-type de `StorageError` mais reste, lui, une erreur de **contenu** (le fichier
+# attendu n'existe vraiment pas) : géré séparément, avant ce tuple, dans `run_ingest_media`.
+_INFRASTRUCTURE_ERRORS: tuple[type[Exception], ...] = (StorageError, DBAPIError)
+
+
+def _shot_at_exif_is_inconsistent(shot_at_exif: datetime | None) -> bool:
+    if shot_at_exif is None:
+        return False
+    if shot_at_exif.year < EXIF_MIN_YEAR:
+        return True
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
+    return shot_at_exif > now_naive + EXIF_FUTURE_TOLERANCE
 
 
 @dataclass(slots=True)
@@ -192,7 +217,18 @@ def run_ingest_media(
             media.shot_at = master.shot_at
             media.camera_id = master.camera_id
             media.ingest_status = "ingested"
-            media.attachment_status = "unattached"
+            # Revue J1 (🟠) : avant ce correctif, un doublon atterrissait systématiquement
+            # dans le bac « à rattacher » (`attachment_status="unattached"`) sans motif
+            # lisible — l'humain n'avait aucune indication que ce média n'était pas
+            # réellement orphelin. On mirore l'état de rattachement du maître au moment du
+            # dédoublonnage (le maître a déjà traversé tout le pipeline, y compris
+            # `attach_time`, avant qu'un doublon ne puisse être détecté) : cohérent et
+            # motivé, sans jamais rendre le doublon éditable indépendamment (`GET /media`
+            # l'exclut par défaut, `routers/media.py`).
+            media.attachment_status = master.attachment_status
+            media.attachment_source = master.attachment_source
+            media.attachment_detail = master.attachment_detail
+            media.shooting_id = master.shooting_id
             _write_event(
                 session,
                 media_id=media.id,
@@ -214,8 +250,46 @@ def run_ingest_media(
 
         # 4. exif — tolérant, jamais d'exception (§3-F.1).
         exif_data = _step("exif", lambda: exif_mod.extract_exif(data))
-        camera = exif_mod.resolve_camera(session, exif_data)
-        shot_at = exif_mod.compute_shot_at(exif_data.shot_at_exif, camera)
+
+        # §3-F.2 — motif `exif_inconsistent` (revue J1, 🟠 : jamais produit avant ce
+        # correctif). Fin de chaîne, comme les autres quarantaines : une date aberrante ne
+        # doit pas empêcher de savoir qu'un doublon éventuel existe (le hash est déjà posé
+        # ci-dessus), mais elle ne doit pas non plus être rattachée à un shooting.
+        if _shot_at_exif_is_inconsistent(exif_data.shot_at_exif):
+            _write_event(
+                session,
+                media_id=media.id,
+                batch_id=media.batch_id,
+                job_id=job_id,
+                step="exif",
+                status="quarantined",
+                duration_ms=0,
+                message="exif_inconsistent",
+            )
+            assert exif_data.shot_at_exif is not None  # narrows for mypy — guard above
+            _quarantine(
+                media,
+                "exif_inconsistent",
+                {"shot_at_exif": exif_data.shot_at_exif.isoformat()},
+            )
+            session.flush()
+            return IngestOutcome(
+                media_id=media.id,
+                ingest_status=media.ingest_status,
+                attachment_status=media.attachment_status,
+                quarantine_reason=media.quarantine_reason,
+                duplicate_of_media_id=None,
+            )
+
+        # Revue J1 (🔴 n°1) : `resolve_camera` (I/O base) et `compute_shot_at` (peut lever
+        # `ValueError` sur un fuseau invalide, ex. `ZoneInfo("")` — cf. `pipeline/exif.py`)
+        # doivent passer par `_step`, comme toute autre étape : le contrat de tête de
+        # module (« ne lève jamais ») était rompu tant qu'elles s'exécutaient hors de son
+        # filet.
+        camera = _step("resolve_camera", lambda: exif_mod.resolve_camera(session, exif_data))
+        shot_at = _step(
+            "compute_shot_at", lambda: exif_mod.compute_shot_at(exif_data.shot_at_exif, camera)
+        )
 
         media.shot_at_exif = exif_data.shot_at_exif
         media.shot_at = shot_at
@@ -245,9 +319,16 @@ def run_ingest_media(
         hd_key = content_addressed_key("hd", content_hash_hex, DERIVATIVE_HD_EXT)
         preview_key = content_addressed_key("preview", content_hash_hex, DERIVATIVE_WEBP_EXT)
         thumb_key = content_addressed_key("thumb", content_hash_hex, DERIVATIVE_WEBP_EXT)
-        storage.put_bytes(hd_key, data, content_type="image/jpeg")
-        storage.put_bytes(preview_key, preview_bytes, content_type="image/webp")
-        storage.put_bytes(thumb_key, thumb_bytes, content_type="image/webp")
+
+        # Revue J1 (🔴 n°1) : les trois écritures de stockage doivent passer par `_step` —
+        # une panne de stockage (quota, R2 injoignable) au milieu des trois écritures ne
+        # doit jamais s'échapper du filet et crasher le worker.
+        def _store() -> None:
+            storage.put_bytes(hd_key, data, content_type="image/jpeg")
+            storage.put_bytes(preview_key, preview_bytes, content_type="image/webp")
+            storage.put_bytes(thumb_key, thumb_bytes, content_type="image/webp")
+
+        _step("store", _store)
         media.storage_key_hd = hd_key
         media.storage_key_preview = preview_key
         media.storage_key_thumb = thumb_key
@@ -277,13 +358,24 @@ def run_ingest_media(
         )
 
     except _StepFailed as failed:
+        # Revue J1 (🟠) : avant ce correctif, les deux branches faisaient la même chose —
+        # **toute** panne d'infrastructure (R2 injoignable, base de données coupée en plein
+        # `flush()`) devenait une quarantaine terminale au lieu d'un retry. Seule une
+        # erreur de **contenu** doit quarantiner le média ; une panne d'infrastructure
+        # authentique doit au contraire s'échapper ici pour que le worker (`runner.py`)
+        # la traite comme un échec de *job* récupérable (requeue avec backoff).
         if isinstance(failed.original, ObjectNotFoundError):
             # Fichier attendu absent du stockage : jamais silencieux, jamais perdu — la
             # ligne `media` existe déjà (garantie transactionnelle §3-F.4.1), on la
             # quarantaine plutôt que de la laisser en `uploaded`/`processing` pour toujours.
+            # Sous-type de `StorageError` mais traité en premier : contrairement à une
+            # panne réseau/quota, un objet durablement absent ne se résoudra pas tout seul
+            # au prochain essai.
             _quarantine(
                 media, "ingest_failed", {"step": failed.step, "error": str(failed.original)}
             )
+        elif isinstance(failed.original, _INFRASTRUCTURE_ERRORS):
+            raise failed.original from failed
         else:
             _quarantine(
                 media, "ingest_failed", {"step": failed.step, "error": str(failed.original)}

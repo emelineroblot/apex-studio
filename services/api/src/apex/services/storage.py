@@ -46,6 +46,19 @@ class ObjectNotFoundError(StorageError):
         self.key = key
 
 
+class PathTraversalError(ValueError):
+    """Clé de stockage tentant d'échapper à la racine (revue J1, 🔴 n°4).
+
+    **Volontairement pas** un `StorageError` : c'est une erreur de contenu (clé
+    invalide), pas une panne d'infrastructure — `pipeline/ingest.py` doit la quarantiner,
+    jamais la traiter comme un échec de job à retenter.
+    """
+
+    def __init__(self, key: str) -> None:
+        super().__init__(f"Clé de stockage invalide (hors racine) : « {key} ».")
+        self.key = key
+
+
 @dataclass(slots=True)
 class ObjectBody:
     """Corps d'un objet lu — toujours consommé en flux (§3-H.3), jamais chargé entier."""
@@ -109,31 +122,51 @@ class LocalDiskStorage(StorageClient):
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self._root_resolved = self.root.resolve()
 
     def _path(self, key: str) -> Path:
-        # `key` est toujours un chemin relatif construit par notre propre code
-        # (content-addressed ou `incoming/{batch_id}/{idempotency_key}`) — jamais dérivé
-        # d'une entrée utilisateur brute sans passer par nos constructeurs de clé.
-        return self.root / key
+        """Résout `key` sous la racine.
+
+        **Défense en profondeur** (revue J1, 🔴 n°4) : le commentaire précédent affirmait
+        que `key` n'était « jamais dérivée d'une entrée utilisateur brute » — c'était faux
+        (`Idempotency-Key`, validé au routeur *depuis ce correctif*, atteignait ici sans
+        contrôle). Même avec la validation en amont, cette méthode refuse toute clé qui
+        échapperait à la racine (`../`, chemin absolu) plutôt que de la résoudre
+        silencieusement — la validation au routeur peut changer sans que cette garantie
+        de dernier recours ne bouge.
+        """
+        candidate = (self.root / key).resolve()
+        if not candidate.is_relative_to(self._root_resolved):
+            raise PathTraversalError(key)
+        return candidate
 
     def put_stream(self, key: str, stream: IO[bytes], *, content_type: str | None = None) -> int:
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix(path.suffix + ".part")
         written = 0
-        with tmp_path.open("wb") as out:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                out.write(chunk)
-                written += len(chunk)
-        tmp_path.replace(path)  # écriture atomique côté disque local
+        try:
+            with tmp_path.open("wb") as out:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    out.write(chunk)
+                    written += len(chunk)
+            tmp_path.replace(path)  # écriture atomique côté disque local
+        except OSError as exc:
+            # Panne d'infrastructure authentique (disque plein, permissions) — jamais
+            # avalée silencieusement (revue J1, 🟠 : distinguer erreur de contenu et
+            # erreur d'infrastructure dans `pipeline/ingest.py`).
+            raise StorageError(str(exc)) from exc
         return written
 
     def put_bytes(self, key: str, data: bytes, *, content_type: str | None = None) -> None:
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix(path.suffix + ".part")
-        tmp_path.write_bytes(data)
-        tmp_path.replace(path)
+        try:
+            tmp_path.write_bytes(data)
+            tmp_path.replace(path)
+        except OSError as exc:
+            raise StorageError(str(exc)) from exc
 
     def open_stream(self, key: str) -> ObjectBody:
         path = self._path(key)
@@ -160,7 +193,10 @@ class LocalDiskStorage(StorageClient):
             return
         for path in base.rglob("*"):
             if path.is_file() and not path.name.endswith(".part"):
-                yield str(path.relative_to(self.root)).replace("\\", "/")
+                # `_path()` renvoie désormais un chemin résolu (`.resolve()`, défense en
+                # profondeur ci-dessus) — la relativisation doit se faire contre la racine
+                # elle aussi résolue, sinon `relative_to` lève si `self.root` est relatif.
+                yield str(path.relative_to(self._root_resolved)).replace("\\", "/")
 
     def object_last_modified(self, key: str) -> datetime | None:
         path = self._path(key)
@@ -204,16 +240,29 @@ class S3Storage(StorageClient):
         )
 
     def put_stream(self, key: str, stream: IO[bytes], *, content_type: str | None = None) -> int:
+        from botocore.exceptions import BotoCoreError, ClientError
+
         extra = {"ContentType": content_type} if content_type else {}
-        self._client.upload_fileobj(stream, self.bucket, key, ExtraArgs=extra or None)
-        head = self._client.head_object(Bucket=self.bucket, Key=key)
+        try:
+            self._client.upload_fileobj(stream, self.bucket, key, ExtraArgs=extra or None)
+            head = self._client.head_object(Bucket=self.bucket, Key=key)
+        except (ClientError, BotoCoreError) as exc:
+            # Panne d'infrastructure authentique (R2 injoignable, quota, réseau) — jamais
+            # avalée silencieusement (revue J1, 🟠 : distinguer erreur de contenu et
+            # erreur d'infrastructure dans `pipeline/ingest.py`).
+            raise StorageError(str(exc)) from exc
         return int(head["ContentLength"])
 
     def put_bytes(self, key: str, data: bytes, *, content_type: str | None = None) -> None:
+        from botocore.exceptions import BotoCoreError, ClientError
+
         kwargs: dict[str, Any] = {"Bucket": self.bucket, "Key": key, "Body": data}
         if content_type:
             kwargs["ContentType"] = content_type
-        self._client.put_object(**kwargs)
+        try:
+            self._client.put_object(**kwargs)
+        except (ClientError, BotoCoreError) as exc:
+            raise StorageError(str(exc)) from exc
 
     def open_stream(self, key: str) -> ObjectBody:
         from botocore.exceptions import ClientError

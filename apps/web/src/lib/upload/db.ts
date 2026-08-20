@@ -10,7 +10,16 @@
  * `implementation.md`.
  */
 
-export type UploadItemStatus = "pending" | "uploading" | "done" | "error";
+/**
+ * `rejected` : état terminal explicite pour un `413` (`quota_exceeded`/`file_too_large`,
+ * revue J1 — voir `implementation.md`). Le backend crée quand même le média, en
+ * quarantaine, **avant** de répondre l'erreur ; un rejeu de l'`Idempotency-Key` (retry
+ * automatique ou bouton) renvoie alors un `200 duplicate=true` sur ce média déjà
+ * quarantiné — jamais un vrai succès. Ne jamais retenter automatiquement ni proposer de
+ * bouton « Réessayer » sur cet état, sous peine d'afficher « Envoyé » sur un média en
+ * quarantaine.
+ */
+export type UploadItemStatus = "pending" | "uploading" | "done" | "error" | "rejected";
 
 export type UploadItem = {
   /** Clé d'idempotence stable — envoyée telle quelle au backend (`Idempotency-Key`). */

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import * as camerasApi from "@/lib/api/resources/cameras";
-import * as mediaApi from "@/lib/api/resources/media";
 import { useAsync } from "@/hooks/useAsync";
 import { friendlyErrorMessage } from "@/lib/api/errors";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -55,16 +54,14 @@ function CameraCard({ camera, onUpdated }: { camera: CameraOut; onUpdated: () =>
     setError(null);
     setResult(null);
     try {
-      const before = await mediaApi.list({ unattached: true, limit: 1 });
-      await camerasApi.update(camera.id, { clock_offset_seconds: Number(offset) });
-      const after = await mediaApi.list({ unattached: true, limit: 1 });
-      const beforeCount = before.total ?? before.items.length;
-      const afterCount = after.total ?? after.items.length;
-      const reattached = Math.max(0, beforeCount - afterCount);
+      const response = await camerasApi.update(camera.id, { clock_offset_seconds: Number(offset) });
+      const { reattached } = response;
       setResult(
-        reattached > 0
-          ? `${reattached} photo(s) re-rattachée(s) suite à ce réglage.`
-          : "Réglage enregistré — aucune photo du bac « à rattacher » n'était concernée.",
+        reattached == null
+          ? "Réglage enregistré — le recalcul du rattachement est en cours."
+          : reattached > 0
+            ? `${reattached} photo(s) re-rattachée(s) suite à ce réglage.`
+            : "Réglage enregistré — aucune photo du bac « à rattacher » n'était concernée.",
       );
       setConfirming(false);
       onUpdated();

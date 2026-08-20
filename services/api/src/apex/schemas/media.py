@@ -24,6 +24,14 @@ class MediaSummary(BaseModel):
     shooting_id: int | None
     is_simulated: bool
     duplicate_of_media_id: int | None
+    # Manque de contrat relevé en intégration live J1 : sans ces deux champs, la grille ne
+    # peut ni savoir qu'un média appartient à une rafale, ni afficher le compte de la série
+    # (« une vignette + N clichés ») sans une requête par média. `series_id` seul suffirait
+    # à filtrer côté serveur (voir `GET /media?series=`) mais pas à afficher le badge côté
+    # client — d'où `series_member_count`, lu depuis `media_series.member_count` (déjà
+    # tenu à jour par `pipeline/series.py`), jamais recalculé ici.
+    series_id: int | None
+    series_member_count: int | None
 
 
 class MediaEngagementOut(BaseModel):

@@ -34,10 +34,15 @@ def check_integrity(data: bytes) -> IntegrityResult:
     # `Image.verify()` détecte la plupart des fichiers tronqués/corrompus, mais invalide
     # l'objet pour tout usage ultérieur — on rouvre pour un décodage réel complet, qui
     # attrape les corruptions que `verify()` seul laisse passer (§3-F.1).
+    # 🟡 : `Image.DecompressionBombError` hérite d'`Exception`, pas d'`OSError` — absente
+    # des tuples ci-dessous, elle se serait échappée de cette fonction (« ne lève jamais »
+    # rompu). `MAX_DIMENSION_PX` (144 MPx) dépasse le seuil par défaut de Pillow (~89 MPx) :
+    # une image dans notre plage de dimensions acceptée peut malgré tout déclencher ce
+    # garde-fou-là.
     try:
         with Image.open(io.BytesIO(data)) as probe:
             probe.verify()
-    except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError):
         return IntegrityResult(ok=False, reason="not_an_image", detail={})
 
     try:
@@ -45,7 +50,7 @@ def check_integrity(data: bytes) -> IntegrityResult:
             img.load()  # décodage réel — lève sur un flux tronqué en plein milieu des données
             fmt = img.format
             width, height = img.size
-    except (OSError, ValueError, SyntaxError) as exc:
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
         return IntegrityResult(ok=False, reason="truncated_file", detail={"error": str(exc)})
 
     if fmt != "JPEG":

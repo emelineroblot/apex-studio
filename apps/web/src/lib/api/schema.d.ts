@@ -558,6 +558,23 @@ export interface paths {
         patch: operations["patch_camera_api_v1_cameras__camera_id__patch"];
         trace?: never;
     };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Liste des comptes internes (id, nom, rôle) — pour l'affectation d'équipe */
+        get: operations["list_users_api_v1_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/queue/stats": {
         parameters: {
             query?: never;
@@ -1267,12 +1284,18 @@ export interface components {
         };
         /**
          * CameraPatchResponse
-         * @description `reattach_job_id` est non nul si le décalage change : enqueue `reattach_camera`.
+         * @description `reattach_job_id` est non nul si le décalage/fuseau change : enqueue
+         *     `reattach_camera`. `reattached` (revue J1, 🟠) reflète le compte déjà calculé par le
+         *     handler (`reattach_camera.py`) — `None` si le tick déclenché après l'enqueue n'a pas eu
+         *     le temps de terminer ce job avant la réponse (file chargée) : l'appelant doit alors
+         *     suivre `reattach_job_id` via `GET /queue/stats` plutôt que supposer `0`.
          */
         CameraPatchResponse: {
             camera: components["schemas"]["CameraOut"];
             /** Reattach Job Id */
             reattach_job_id?: number | null;
+            /** Reattached */
+            reattached?: number | null;
         };
         /** CircuitCreate */
         CircuitCreate: {
@@ -1895,6 +1918,10 @@ export interface components {
             is_simulated: boolean;
             /** Duplicate Of Media Id */
             duplicate_of_media_id: number | null;
+            /** Series Id */
+            series_id: number | null;
+            /** Series Member Count */
+            series_member_count: number | null;
         };
         /**
          * OcrCandidateOut
@@ -2620,6 +2647,18 @@ export interface components {
              * Format: email
              */
             email: string;
+            /** Full Name */
+            full_name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "photographer";
+        };
+        /** UserSummary */
+        UserSummary: {
+            /** Id */
+            id: number;
             /** Full Name */
             full_name: string;
             /**
@@ -3697,6 +3736,8 @@ export interface operations {
                 batch_id?: number | null;
                 unattached?: boolean;
                 quarantined?: boolean;
+                duplicates?: boolean;
+                series?: "collapsed" | "all";
                 cursor?: string | null;
                 limit?: number;
             };
@@ -3971,6 +4012,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_v1_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSummary"][];
                 };
             };
         };

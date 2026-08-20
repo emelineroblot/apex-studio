@@ -54,16 +54,7 @@ export function StaffTab({
 
   if (loading) return <Spinner label="Chargement de l'équipe…" />;
   if (error) {
-    return (
-      <ErrorState
-        message={
-          error instanceof Error && error.message.includes("GET /users")
-            ? "Aucune route ne liste les employés côté API pour ce jalon (voir implementation.md)."
-            : friendlyErrorMessage(error)
-        }
-        onRetry={reload}
-      />
-    );
+    return <ErrorState message={friendlyErrorMessage(error)} onRetry={reload} />;
   }
   if (!users || users.length === 0) {
     return <EmptyState title="Aucun employé disponible" />;

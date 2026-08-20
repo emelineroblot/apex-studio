@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import Link from "next/link";
 import type { UploadItem } from "@/lib/upload/db";
 import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/Button";
@@ -8,6 +9,7 @@ const STATUS_LABEL: Record<UploadItem["status"], string> = {
   uploading: "Envoi…",
   done: "Envoyé",
   error: "Échec",
+  rejected: "Refusé — en quarantaine",
 };
 
 const STATUS_CLASSES: Record<UploadItem["status"], string> = {
@@ -15,6 +17,7 @@ const STATUS_CLASSES: Record<UploadItem["status"], string> = {
   uploading: "text-accent-600",
   done: "text-ok-600",
   error: "text-danger-600",
+  rejected: "text-danger-600",
 };
 
 export function UploadQueueList({
@@ -32,7 +35,9 @@ export function UploadQueueList({
             <p className="truncate font-medium text-ink-800">{item.name}</p>
             <p className="text-xs text-ink-400">
               {formatBytes(item.size)}
-              {item.error && item.status === "error" ? ` — ${item.error}` : null}
+              {item.error && (item.status === "error" || item.status === "rejected")
+                ? ` — ${item.error}`
+                : null}
             </p>
           </div>
           <span className={clsx("shrink-0 text-xs font-medium", STATUS_CLASSES[item.status])}>
@@ -42,6 +47,14 @@ export function UploadQueueList({
             <Button size="sm" variant="secondary" onClick={() => onRetry(item.id)}>
               Réessayer
             </Button>
+          ) : null}
+          {item.status === "rejected" && item.mediaId != null ? (
+            <Link
+              href={`/media/${item.mediaId}`}
+              className="shrink-0 text-xs font-medium text-accent-600 hover:underline"
+            >
+              Voir en quarantaine
+            </Link>
           ) : null}
         </li>
       ))}

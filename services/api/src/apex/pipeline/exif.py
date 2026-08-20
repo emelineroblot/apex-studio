@@ -205,7 +205,12 @@ def compute_shot_at(shot_at_exif: datetime | None, camera: Camera | None) -> dat
     tz_name = camera.timezone if camera is not None else "Europe/Paris"
     try:
         tz = ZoneInfo(tz_name)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
+        # Revue J1 (🔴 n°1, scénario reproduit) : `ZoneInfo("")` lève `ValueError`, pas
+        # `ZoneInfoNotFoundError` — un fuseau vide ou mal formé (ex. bug côté validation
+        # amont) ne doit jamais faire planter le pipeline. Défense en profondeur : la
+        # valeur est désormais aussi validée à l'écriture (`schemas/catalog.CameraPatch`),
+        # mais cette fonction reste tolérante par elle-même.
         tz = ZoneInfo("Europe/Paris")
     localized = shot_at_exif.replace(tzinfo=tz)
     offset = camera.clock_offset_seconds if camera is not None else 0

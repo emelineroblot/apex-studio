@@ -180,7 +180,8 @@ def upgrade() -> None:
         "job",
         ["kind", "dedupe_key"],
         unique=True,
-        postgresql_where=sa.text("dedupe_key IS NOT NULL AND status IN ('pending','running')"),
+        # Correction revue J1 (🟠) : ne couvre plus `running` — voir `queue/enqueue.py`.
+        postgresql_where=sa.text("dedupe_key IS NOT NULL AND status = 'pending'"),
     )
     op.create_index("job_recent_idx", "job", [sa.literal_column("created_at DESC")], unique=False)
     op.create_index(
@@ -1243,7 +1244,7 @@ def downgrade() -> None:
     op.drop_index(
         "job_dedupe_idx",
         table_name="job",
-        postgresql_where=sa.text("dedupe_key IS NOT NULL AND status IN ('pending','running')"),
+        postgresql_where=sa.text("dedupe_key IS NOT NULL AND status = 'pending'"),
     )
     op.drop_index("job_claim_idx", table_name="job", postgresql_where=sa.text("status = 'pending'"))
     op.drop_table("job")

@@ -39,6 +39,7 @@ from apex.routers import (
     shootings,
     stats,
     teams,
+    users,
 )
 from apex.routers import settings as settings_router
 
@@ -103,6 +104,7 @@ app.include_router(engagements.router, prefix=API_PREFIX)
 app.include_router(batches.router, prefix=API_PREFIX)
 app.include_router(media.router, prefix=API_PREFIX)
 app.include_router(cameras.router, prefix=API_PREFIX)
+app.include_router(users.router, prefix=API_PREFIX)
 app.include_router(jobs.router, prefix=API_PREFIX)
 
 # Routeurs J2

@@ -8,11 +8,11 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from apex.db import get_db
-from apex.models.media import Media, MediaEngagement, PipelineEvent
+from apex.models.media import Media, MediaEngagement, MediaSeries, PipelineEvent
 from apex.models.shooting import Engagement
 from apex.routers._common import not_implemented
 from apex.schemas.common import Page
@@ -41,10 +41,14 @@ VARIANT_STORAGE_ATTR = {
 
 
 def _thumb_url(media_id: int) -> str:
-    return f"/api/v1/media/{media_id}/file/thumb"
+    # Revue J1 (bloquant n°7) : le préfixe `/api/v1` est déjà ajouté par le client HTTP du
+    # frontend (`buildUrl`, cf. `AuthImage`/`apiFetchBlob`) — le laisser ici double le
+    # préfixe en mode `live` (`/api/v1/api/v1/media/...`, 404 sur 100 % des vignettes).
+    # Normalisé côté backend : c'est ici qu'on tranche, le frontend ne compense pas.
+    return f"/media/{media_id}/file/thumb"
 
 
-def _to_summary(media: Media) -> MediaSummary:
+def _to_summary(media: Media, *, series_member_count: int | None) -> MediaSummary:
     return MediaSummary(
         id=media.id,
         thumb_url=_thumb_url(media.id),
@@ -54,6 +58,8 @@ def _to_summary(media: Media) -> MediaSummary:
         shooting_id=media.shooting_id,
         is_simulated=media.is_simulated,
         duplicate_of_media_id=media.duplicate_of_media_id,
+        series_id=media.series_id,
+        series_member_count=series_member_count,
     )
 
 
@@ -66,10 +72,33 @@ def list_media(
     batch_id: int | None = None,
     unattached: bool = False,
     quarantined: bool = False,
+    duplicates: bool = False,
+    series: Literal["collapsed", "all"] = "collapsed",
     cursor: str | None = None,
     limit: int = Query(default=50, le=100),
 ) -> Page[MediaSummary]:
     stmt = select(Media)
+    # Revue J1 (🟠) : la grille listait aussi les doublons (`duplicate_of_media_id` non
+    # `NULL`), contredisant « deux fichiers identiques sont dédoublonnés » (critère
+    # d'acceptation J1). Intégration live J1 : ce filtre par défaut laissait l'onglet
+    # « Doublons » structurellement vide, faute de tout moyen de le lever — `duplicates`
+    # l'inverse (plutôt que de l'annuler) pour ne jamais mélanger doublons et non-doublons
+    # sur la même page, symétrique à `unattached`/`quarantined` ci-dessous. Un doublon reste
+    # consultable individuellement via `GET /media/{id}` quel que soit ce paramètre (ex.
+    # lien depuis la fiche du maître).
+    if duplicates:
+        stmt = stmt.where(Media.duplicate_of_media_id.is_not(None))
+    else:
+        stmt = stmt.where(Media.duplicate_of_media_id.is_(None))
+    # Intégration live J1 : `MediaSummary` n'exposait ni `series_id` ni le compte de la
+    # série, empêchant la grille de satisfaire « une rafale est regroupée en série et
+    # n'affiche qu'un représentant » (critère d'acceptation J1). Par défaut
+    # (`series=collapsed`) on ne renvoie que les médias hors série et le représentant de
+    # chaque série ; `series=all` renvoie tous les membres (ex. zoom sur une série depuis sa
+    # fiche) — nommage symétrique au `series=collapsed|all` déjà prévu pour `GET /search`
+    # (§3-K.2 du plan).
+    if series == "collapsed":
+        stmt = stmt.where(or_(Media.series_id.is_(None), Media.is_series_representative.is_(True)))
     visibility = access.media_visibility_clause(user)
     if visibility is not None:
         stmt = stmt.where(visibility)
@@ -85,7 +114,22 @@ def list_media(
         stmt = stmt.where(Media.ingest_status == "quarantined")
 
     items, next_cursor = paginate_by_id(db, stmt, Media.id, cursor=cursor, limit=limit)
-    return Page(items=[_to_summary(m) for m in items], next_cursor=next_cursor)
+
+    # Un seul aller-retour pour toute la page plutôt qu'un par média (`member_count` est
+    # déjà tenu à jour sur `media_series`, cf. `pipeline/series.py` — pas de N+1 ici).
+    series_ids = {m.series_id for m in items if m.series_id is not None}
+    member_counts: dict[int, int] = {}
+    if series_ids:
+        rows = db.execute(
+            select(MediaSeries.id, MediaSeries.member_count).where(MediaSeries.id.in_(series_ids))
+        ).all()
+        for series_id, member_count in rows:
+            member_counts[series_id] = member_count
+
+    return Page(
+        items=[_to_summary(m, series_member_count=member_counts.get(m.series_id)) for m in items],
+        next_cursor=next_cursor,
+    )
 
 
 def _media_out(db: Session, media: Media) -> MediaOut:
@@ -228,6 +272,18 @@ def attach_media(
     media_id: int, payload: MediaAttachRequest, user: CurrentUser, db: Session = Depends(get_db)
 ) -> MediaOut:
     media = access.get_visible_media_or_404(db, user, media_id)
+    if media.ingest_status == "quarantined":
+        # 🟡 : la fixture frontend renvoie déjà `409` pour ce cas (divergence relevée en
+        # revue) — un média en quarantaine n'a pas de dérivés fiables (vignette, hash) et
+        # ne doit pas pouvoir être rattaché tant que le motif n'est pas résolu.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "media_quarantined",
+                "message": "Ce média est en quarantaine — impossible à rattacher.",
+                "detail": {"quarantine_reason": media.quarantine_reason},
+            },
+        )
     shooting = access.get_visible_shooting_or_404(db, user, payload.shooting_id)
 
     media.shooting_id = shooting.id

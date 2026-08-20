@@ -1,15 +1,27 @@
 """`drain()` — moteur de drainage de la file (§3-E.2, §3-E.5, §3-E.7 du plan).
 
-Un seul module, deux pilotes (§3-E.7) :
+Un seul module, plusieurs pilotes (§3-E.7) :
 - `apex.cli worker --loop` : boucle locale, appelle `drain()` en rafale et dort 500 ms
   quand la file est vide (voir `apex/cli.py`) ;
-- `POST /jobs/tick` (à câbler au lot « stockage/pipeline » suivant) : appelle `drain()`
-  une fois avec un budget de temps borné (serverless, `maxDuration=300`).
+- `POST /jobs/tick` : appelle `drain()` une fois avec un budget de temps borné
+  (serverless, `maxDuration=300`) ;
+- `GET /batches/{id}` et `PATCH /cameras/{id}` : déclenchent un tick à budget court après
+  chaque enqueue depuis l'API (§3-E.7 (a)), pour que le résultat soit démontrable en ligne
+  sans attendre le prochain polling.
 
-Vide de logique métier : le registre (`queue.registry`) ne contient encore aucun handler
-à ce stade du jalon — un job réclamé ici échoue donc systématiquement avec
-`status='failed'` et un message explicite (« kind inconnu »), conformément à §3-E.3
-(« jamais de silence »). Les handlers réels arrivent aux lots suivants.
+Trois garanties de non-double-traitement superposées (§3-E.4) — les deux dernières ont été
+corrigées en revue J1 (🔴 n°3) :
+1. `FOR UPDATE SKIP LOCKED` + commit immédiat (`claim.claim_batch`).
+2. Index unique partiel `(kind, dedupe_key)` sur les jobs `pending` (`queue.enqueue`).
+3. **Toute transition d'un job réclamé est gardée par `WHERE id=:id AND
+   locked_by=:worker_id`** (`_guarded_transition` ci-dessous) : si un autre processus a
+   entre-temps repris ce job (ex. `reap_stale` l'a jugé mort pendant que ce worker
+   travaillait encore dessus), l'`UPDATE` affecte 0 ligne et ce worker **abandonne** son
+   résultat plutôt que d'écraser l'état déjà repris. Le heartbeat est en outre rafraîchi
+   **avant chaque job** du lot (pas seulement une fois à la réclamation) — sans quoi un
+   lot de 10 jobs à ~1-3 s chacun peut voir son 10ᵉ job démarrer alors que le heartbeat
+   date de plusieurs minutes, et se faire déclarer mort par un `reap_stale` concurrent en
+   plein traitement (scénario détaillé en revue).
 """
 
 from __future__ import annotations
@@ -17,12 +29,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
-from sqlalchemy import func, select
+from sqlalchemy import Update, func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from apex.models.job import Job
-from apex.queue.claim import claim_batch, reap_stale
+from apex.queue.claim import claim_batch, reap_stale, release_unclaimed
+from apex.queue.claim import heartbeat as refresh_heartbeat
 from apex.queue.registry import JobContext, get_handler
 
 # Backoff des échecs récupérables (§3-E.2) : 5 s, 30 s, 120 s, puis `dead` au-delà de
@@ -43,6 +58,7 @@ class DrainResult:
     dead: int = 0
     requeued: int = 0
     reaped: int = 0
+    released: int = 0
     remaining: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -66,28 +82,53 @@ def _count_remaining(session: Session) -> int:
     return int(session.execute(stmt).scalar_one())
 
 
-def _make_heartbeat(session: Session, job: Job) -> Callable[[], None]:
+def _make_heartbeat(session: Session, job: Job, worker_id: str) -> Callable[[], None]:
     """`ctx.heartbeat()` — à appeler toutes les ~10 s dans les handlers longs (§3-E.5)."""
 
     def _heartbeat() -> None:
-        job.heartbeat_at = datetime.now(UTC)
-        session.commit()
+        refresh_heartbeat(session, job.id, worker_id)
 
     return _heartbeat
+
+
+def _guarded_transition(session: Session, job_id: int, worker_id: str, stmt: Update) -> bool:
+    """Applique `stmt` (déjà filtrée sur `Job.id`) en ajoutant la garde `locked_by`
+    (§3-E.4, garantie 3). Renvoie `True` si la transition a effectivement été appliquée par
+    **ce** worker — `False` si un autre processus détenait déjà le job, auquel cas
+    l'appelant doit abandonner son résultat, jamais écraser l'état repris ailleurs.
+    """
+    outcome = cast(
+        CursorResult, session.execute(stmt.where(Job.id == job_id, Job.locked_by == worker_id))
+    )
+    session.commit()
+    return outcome.rowcount > 0
 
 
 def _process_one(session: Session, job: Job, worker_id: str, result: DrainResult) -> None:
     spec = get_handler(job.kind)
     if spec is None:
-        job.status = "failed"
-        job.last_error = f"kind de job inconnu : « {job.kind} » (aucun handler enregistré)"
-        session.commit()
-        result.failed += 1
-        result.errors.append(job.last_error)
+        message = f"kind de job inconnu : « {job.kind} » (aucun handler enregistré)"
+        applied = _guarded_transition(
+            session,
+            job.id,
+            worker_id,
+            update(Job).values(
+                status="failed",
+                last_error=message,
+                locked_by=None,
+                updated_at=datetime.now(UTC),
+            ),
+        )
+        if applied:
+            result.failed += 1
+            result.errors.append(message)
         return
 
     ctx = JobContext(
-        job=job, session=session, worker_id=worker_id, heartbeat=_make_heartbeat(session, job)
+        job=job,
+        session=session,
+        worker_id=worker_id,
+        heartbeat=_make_heartbeat(session, job, worker_id),
     )
     try:
         job_result = spec.func(ctx)
@@ -107,28 +148,77 @@ def _process_one(session: Session, job: Job, worker_id: str, result: DrainResult
             return
         job = refreshed
         if job.attempts >= job.max_attempts:
-            job.status = "dead"
-            job.last_error = message
-            session.commit()
+            applied = _guarded_transition(
+                session,
+                job.id,
+                worker_id,
+                update(Job).values(
+                    status="dead",
+                    last_error=message,
+                    locked_by=None,
+                    updated_at=datetime.now(UTC),
+                ),
+            )
+            if not applied:
+                result.errors.append(message)
+                return
             result.dead += 1
+            # §3-E.5 / revue J1 (🔴 n°1) : un job mort par épuisement des tentatives doit
+            # produire le même effet métier qu'un job mort repris par `reap_stale`
+            # (`claim.reap_stale` dispatche déjà `on_dead` sur son propre chemin) — sans
+            # quoi un média reste indéfiniment `uploaded`/`processing`, hors de tout bac.
+            if spec.on_dead is not None:
+                # Recharge explicitement l'objet depuis la base : `_guarded_transition` a
+                # écrit `status`/`last_error` via un `UPDATE` Core, pas une affectation
+                # ORM — `on_dead` doit voir la valeur définitive de `last_error`, jamais
+                # un attribut resté à sa valeur pré-transition.
+                session.refresh(job)
+                try:
+                    spec.on_dead(session, job)
+                    session.commit()
+                except Exception:  # noqa: BLE001 — cf. `claim.reap_stale` : un hook
+                    # `on_dead` défaillant ne doit jamais empêcher le reste du drainage.
+                    session.rollback()
         else:
-            job.status = "pending"
-            job.run_at = datetime.now(UTC) + timedelta(seconds=_backoff_seconds(job.attempts))
-            job.last_error = message
-            job.locked_by = None
-            job.locked_at = None
-            job.heartbeat_at = None
-            session.commit()
+            applied = _guarded_transition(
+                session,
+                job.id,
+                worker_id,
+                update(Job).values(
+                    status="pending",
+                    run_at=datetime.now(UTC) + timedelta(seconds=_backoff_seconds(job.attempts)),
+                    last_error=message,
+                    locked_by=None,
+                    locked_at=None,
+                    heartbeat_at=None,
+                    updated_at=datetime.now(UTC),
+                ),
+            )
+            if not applied:
+                result.errors.append(message)
+                return
             result.requeued += 1
         result.errors.append(message)
         return
 
-    job.status = "done"
-    job.result = job_result
-    job.locked_by = None
-    job.heartbeat_at = None
-    session.commit()
-    result.done += 1
+    applied = _guarded_transition(
+        session,
+        job.id,
+        worker_id,
+        update(Job).values(
+            status="done",
+            result=job_result,
+            locked_by=None,
+            heartbeat_at=None,
+            updated_at=datetime.now(UTC),
+        ),
+    )
+    if applied:
+        result.done += 1
+    else:
+        result.errors.append(
+            f"job {job.id} : résultat abandonné, repris par un autre worker en cours de traitement"
+        )
 
 
 def drain(
@@ -158,12 +248,24 @@ def drain(
                 break
 
             result.claimed += len(batch)
-            for job in batch:
+            for index, job in enumerate(batch):
                 if deadline is not None and datetime.now(UTC) >= deadline:
-                    # Budget de temps épuisé en cours de lot : le job reste `running`,
-                    # `reap_stale` le récupérera au prochain tick si le worker ne
-                    # revient pas à temps (§3-E.5) — jamais de perte, jamais de silence.
+                    # Budget de temps épuisé en cours de lot (revue J1, 🔴 n°2) : les jobs
+                    # restants ont été réclamés (`attempts` déjà incrémenté par
+                    # `claim_batch`) mais jamais exécutés — les relâcher explicitement en
+                    # `pending` avec `attempts` décrémenté, plutôt que les laisser
+                    # `running` jusqu'à un hypothétique `reap_stale` 3 minutes plus tard.
+                    # Sans ce correctif, une réclamation sans exécution consomme une
+                    # tentative : au bout de `max_attempts` cycles de polling passés à
+                    # réclamer-puis-abandonner, des photos jamais ouvertes finissent en
+                    # quarantaine.
+                    result.released += release_unclaimed(session, batch[index:], worker_id)
                     break
+                # §3-E.5 / revue J1 (🔴 n°3) : rafraîchit le heartbeat avant CHAQUE job du
+                # lot, pas seulement une fois à la réclamation — un lot de 10 jobs à
+                # 1-3 s/job peut voir son dernier job démarrer plusieurs minutes après la
+                # réclamation initiale.
+                refresh_heartbeat(session, job.id, worker_id)
                 _process_one(session, job, worker_id, result)
 
         result.remaining = _count_remaining(session)

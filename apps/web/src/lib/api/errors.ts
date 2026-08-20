@@ -38,6 +38,13 @@ export class ApiError extends Error {
   get isNotFound(): boolean {
     return this.status === 404;
   }
+
+  /** `413` — quota de shooting dépassé ou fichier trop volumineux (`routers/batches.py`).
+   * Le média est déjà créé, en quarantaine, avant la réponse d'erreur : jamais retentable
+   * automatiquement, un rejeu renverrait un faux succès idempotent. */
+  get isPayloadRejected(): boolean {
+    return this.status === 413;
+  }
 }
 
 /** Message générique et sobre pour un état d'erreur affiché à l'écran. */

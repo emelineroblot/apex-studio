@@ -12,7 +12,8 @@ import type {
   MediaOut,
   PipelineEventOut,
 } from "@/lib/api/types";
-import { batches, media, shootings, type FixtureBatch } from "@/lib/api/fixtures/db";
+import { batches, media, shootings, type FixtureBatch, type MediaFixture } from "@/lib/api/fixtures/db";
+import { currentUserId } from "@/lib/api/fixtures/access";
 import { ApiError } from "@/lib/api/errors";
 import { delay, nextId, notFound } from "@/lib/api/fixtures/utils";
 
@@ -61,7 +62,9 @@ function deterministicOutcome(
     return {
       ingest_status: "quarantined",
       quarantine_reason: "dimensions_out_of_range",
-      quarantine_detail: { width: 64, height: 48, min_expected: 800 },
+      // Clé alignée sur le vrai backend (`expected`, pas `min_expected` — jamais émis par
+      // l'API, § `implementation.md`).
+      quarantine_detail: { width: 64, height: 48, expected: "[640..12000]" },
       attachment_status: "unattached",
       attachment_source: null,
       attachment_detail: null,
@@ -112,9 +115,12 @@ export async function uploadFile(
   }
 
   const id = nextId();
-  const item: MediaOut = {
+  const item: MediaFixture = {
     id,
     batch_id: batchId,
+    // Bac « à rattacher » filtré par déposant (§ `fixtures/media.ts`, revue J1) : un upload
+    // simulé appartient à l'utilisateur courant, pas à un compte arbitraire.
+    uploaded_by: currentUserId() ?? 1,
     original_filename: file.name,
     byte_size: file.size,
     mime: file.name.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",

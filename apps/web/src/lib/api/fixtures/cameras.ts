@@ -10,9 +10,9 @@ export async function list(): Promise<CameraOut[]> {
 /**
  * Simule §3-F.3 : recalcule `shot_at = shot_at_exif + clock_offset_seconds` pour les
  * médias non rattachés de ce boîtier et les rattache si l'horodatage corrigé tombe dans
- * la plage d'un shooting. Aucun champ de comptage n'existe dans `CameraPatchResponse`
- * (contrat) : le nombre de photos re-rattachées se lit côté écran en comparant
- * `GET /media?unattached=true` avant/après (voir `implementation.md`).
+ * la plage d'un shooting. `reattached` compte les médias effectivement re-rattachés par
+ * ce recalcul — exposé dans `CameraPatchResponse` (revue J1, constat 🟠) au lieu de
+ * demander à l'écran de comparer `GET /media?unattached=true` avant/après.
  */
 export async function update(id: number, payload: CameraPatch): Promise<CameraPatchResponse> {
   await delay(400);
@@ -24,6 +24,7 @@ export async function update(id: number, payload: CameraPatch): Promise<CameraPa
   Object.assign(camera, payload);
 
   let reattachJobId: number | null = null;
+  let reattachedCount = 0;
   if (offsetChanged) {
     reattachJobId = nextId();
     for (const item of media) {
@@ -42,9 +43,14 @@ export async function update(id: number, payload: CameraPatch): Promise<CameraPa
         item.attachment_status = "shooting_attached";
         item.attachment_source = "pipeline_time";
         item.attachment_detail = null;
+        reattachedCount += 1;
       }
     }
   }
 
-  return { camera, reattach_job_id: reattachJobId };
+  return {
+    camera,
+    reattach_job_id: reattachJobId,
+    reattached: offsetChanged ? reattachedCount : null,
+  };
 }

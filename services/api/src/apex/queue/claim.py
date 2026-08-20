@@ -9,8 +9,10 @@ verrou logique pendant tout le traitement (§3-E.2, Option 2 retenue).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from sqlalchemy import select, text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from apex.models.job import Job
@@ -46,10 +48,58 @@ _REAP_SQL = text(
            run_at = now(), locked_by = NULL, locked_at = NULL, heartbeat_at = NULL,
            last_error = coalesce(last_error, '') || ' | repris après worker silencieux',
            updated_at = now()
-     WHERE status = 'running' AND heartbeat_at < :stale_before
+     WHERE status = 'running' AND (heartbeat_at < :stale_before OR heartbeat_at IS NULL)
     RETURNING id, status, kind
     """
 )
+
+# Relâche un job réclamé (`claim_batch`) mais jamais exécuté — budget de temps de `drain()`
+# épuisé avant d'y arriver (§3-E.2, revue J1 bloquant n°2). Gardé par `locked_by` (§3-E.4,
+# garantie 3) : n'agit que si CE worker détient toujours le job. `attempts` est décrémenté
+# pour annuler l'incrément fait par `_CLAIM_SQL` — une réclamation sans exécution ne doit
+# **jamais** consommer une tentative, sous peine de mettre en quarantaine des médias
+# valides jamais ouverts après quelques cycles de polling (scénario détaillé en revue).
+_RELEASE_SQL = text(
+    """
+    UPDATE job
+       SET status = 'pending', attempts = GREATEST(attempts - 1, 0), run_at = now(),
+           locked_by = NULL, locked_at = NULL, heartbeat_at = NULL, updated_at = now()
+     WHERE id = :id AND locked_by = :worker_id AND status = 'running'
+    """
+)
+
+_HEARTBEAT_SQL = text(
+    """
+    UPDATE job SET heartbeat_at = now(), updated_at = now()
+     WHERE id = :id AND locked_by = :worker_id AND status = 'running'
+    """
+)
+
+
+def release_unclaimed(session: Session, jobs: list[Job], worker_id: str) -> int:
+    """Relâche des jobs réclamés par `worker_id` mais jamais passés à `_process_one` —
+    voir `_RELEASE_SQL`. Renvoie le nombre effectivement relâché (`rowcount` sommé,
+    jamais supposé égal à `len(jobs)` : un autre worker a pu entre-temps reprendre l'un
+    d'eux via `reap_stale`, auquel cas la garde `locked_by` fait échouer cette ligne-là,
+    ce qui est le comportement voulu).
+    """
+    released = 0
+    for job in jobs:
+        outcome = cast(
+            CursorResult, session.execute(_RELEASE_SQL, {"id": job.id, "worker_id": worker_id})
+        )
+        released += outcome.rowcount
+    session.commit()
+    return released
+
+
+def heartbeat(session: Session, job_id: int, worker_id: str) -> bool:
+    """Rafraîchit `heartbeat_at` (§3-E.5) — `True` si ce worker détient toujours le job."""
+    outcome = cast(
+        CursorResult, session.execute(_HEARTBEAT_SQL, {"id": job_id, "worker_id": worker_id})
+    )
+    session.commit()
+    return bool(outcome.rowcount)
 
 
 def claim_batch(session: Session, worker_id: str, batch_size: int) -> list[Job]:

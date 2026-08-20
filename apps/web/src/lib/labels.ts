@@ -2,7 +2,15 @@
  * Dictionnaires de libellés français — un motif technique n'est **jamais** affiché tel
  * quel à l'écran (invariant `AGENTS.md` : bac explicite, motif lisible).
  */
-import type { AttachmentStatus, IngestStatus, QuarantineReason, Role } from "@/lib/api/types";
+import type {
+  AttachmentStatus,
+  ClientKind,
+  IngestStatus,
+  QuarantineReason,
+  Role,
+  ShootingStatus,
+  UnattachedReason,
+} from "@/lib/api/types";
 
 export const ROLE_LABELS: Record<Role, string> = {
   owner: "Dirigeant·e",
@@ -49,29 +57,46 @@ export function quarantineReasonLabel(reason: string | null | undefined): string
 
 /**
  * Motifs du bac « à rattacher » — vivent dans `attachment_detail.reason` (JSON libre côté
- * backend, non typé dans l'OpenAPI). Dictionnaire best-effort sur les valeurs déjà
- * évoquées par le plan (§ critères d'acceptation J1) ; repli lisible sinon.
+ * backend, non typé dans l'OpenAPI — voir `UnattachedReason` dans `lib/api/types.ts` pour
+ * le détail du trou de contrat). Typé `Record<UnattachedReason, string>` : comme
+ * `QUARANTINE_REASON_LABELS` ci-dessus, un motif retiré ici est désormais une erreur de
+ * type, pas un affichage dégradé à l'exécution.
+ *
+ * Correction passe d'intégration live J1 : `outside_shooting_window` n'est **jamais** émis
+ * par le backend (`pipeline/attach_time.py`) — la vraie clé est `no_matching_window`
+ * (constatée en direct sur un média hors fenêtre de shooting). Corrigé pour refléter les
+ * trois raisons réellement produites. Voir `implementation.md`.
  */
-export const UNATTACHED_REASON_LABELS: Record<string, string> = {
+export const UNATTACHED_REASON_LABELS: Record<UnattachedReason, string> = {
   no_exif_timestamp: "Aucun horodatage EXIF exploitable",
   ambiguous_window: "Plusieurs shootings se chevauchent sur cet horodatage",
-  outside_shooting_window: "Horodatage hors de la plage de tout shooting connu",
+  no_matching_window: "Horodatage hors de la plage de tout shooting connu",
 };
 
 export function unattachedReasonLabel(detail: unknown): string {
   if (detail && typeof detail === "object" && "reason" in detail) {
     const reason = String((detail as { reason: unknown }).reason);
-    return UNATTACHED_REASON_LABELS[reason] ?? `Rattachement automatique impossible (${reason})`;
+    return (
+      UNATTACHED_REASON_LABELS[reason as UnattachedReason] ??
+      `Rattachement automatique impossible (${reason})`
+    );
   }
   return "Rattachement automatique impossible — motif non détaillé";
 }
 
-export const SHOOTING_STATUS_LABELS: Record<string, string> = {
+/**
+ * `ShootingOut.status` **est** un vrai enum OpenAPI (`@enum {string}` dans `schema.d.ts`,
+ * contrairement à `quarantine_reason`/`attachment_detail.reason` ci-dessus) — typé
+ * `Record<ShootingStatus, string>` : ici, le garde-fou de compilation est directement
+ * dérivé du contrat généré, pas d'un mirroir manuel.
+ */
+export const SHOOTING_STATUS_LABELS: Record<ShootingStatus, string> = {
   planned: "Programmé",
   done: "Réalisé",
 };
 
-export const CLIENT_KIND_LABELS: Record<string, string> = {
+/** `ClientOut.kind` — même cas : vrai enum OpenAPI, `Record<ClientKind, string>` exhaustif. */
+export const CLIENT_KIND_LABELS: Record<ClientKind, string> = {
   team: "Écurie / team",
   driver: "Pilote indépendant",
   sponsor: "Sponsor",

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from apex.db import get_db
@@ -79,4 +80,17 @@ def patch_client(client_id: int, payload: ClientUpdate, db: Session = Depends(ge
 def delete_client(client_id: int, db: Session = Depends(get_db)) -> None:
     client = _get_or_404(db, client_id)
     db.delete(client)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # 🟡 : un client référencé (shooting, engagement, facture...) faisait lever un
+        # `IntegrityError` non capturé -> `500` au lieu d'un `409` explicite.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "client_in_use",
+                "message": "Ce client est référencé ailleurs et ne peut pas être supprimé.",
+                "detail": None,
+            },
+        ) from exc

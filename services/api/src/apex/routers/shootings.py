@@ -8,6 +8,7 @@ les engagements sont ouverts en écriture au photographe affecté.
 
 import csv
 import io
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -63,6 +64,24 @@ def _to_summary(row: Any) -> ShootingSummary:
     )
 
 
+def _parse_query_datetime(value: str, *, param: str) -> datetime:
+    """🟡 : `from`/`to` étaient passés bruts à SQLAlchemy — une valeur non parsable
+    (ex. `from=n%27importe+quoi`) atteignait Postgres tel quel et levait un `DataError`
+    non capturé, renvoyé en `500` plutôt qu'en `422`.
+    """
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_datetime",
+                "message": f"Paramètre « {param} » : date/heure ISO 8601 attendue.",
+                "detail": {"param": param, "value": value},
+            },
+        ) from exc
+
+
 @router.get("", response_model=Page[ShootingSummary], summary="Liste des shootings")
 def list_shootings(
     user: CurrentUser,
@@ -82,9 +101,9 @@ def list_shootings(
     if status is not None:
         stmt = stmt.where(Shooting.status == status)
     if from_ is not None:
-        stmt = stmt.where(Shooting.starts_at >= from_)
+        stmt = stmt.where(Shooting.starts_at >= _parse_query_datetime(from_, param="from"))
     if to is not None:
-        stmt = stmt.where(Shooting.starts_at <= to)
+        stmt = stmt.where(Shooting.starts_at <= _parse_query_datetime(to, param="to"))
     if cursor is not None:
         try:
             after_id = int(cursor)
@@ -155,7 +174,9 @@ def create_shooting(payload: ShootingCreate, db: Session = Depends(get_db)) -> S
             detail={
                 "code": "invalid_shooting",
                 "message": "La plage horaire ou une référence est invalide.",
-                "detail": str(exc.orig),
+                # P1 (revue J1) : ne jamais renvoyer `str(exc.orig)` au client — le
+                # message PostgreSQL brut peut exposer des noms de contrainte/colonne.
+                "detail": None,
             },
         ) from exc
     db.refresh(shooting)
@@ -194,7 +215,9 @@ def patch_shooting(
             detail={
                 "code": "invalid_shooting",
                 "message": "La plage horaire ou une référence est invalide.",
-                "detail": str(exc.orig),
+                # P1 (revue J1) : ne jamais renvoyer `str(exc.orig)` au client — le
+                # message PostgreSQL brut peut exposer des noms de contrainte/colonne.
+                "detail": None,
             },
         ) from exc
     db.refresh(shooting)
@@ -277,20 +300,40 @@ def create_engagement(
     return EngagementOut.model_validate(engagement)
 
 
+class _UnknownReferenceError(Exception):
+    """Revue J1 (🟠) : l'import CSV contournait la matrice des rôles (§3-I) — un
+    photographe, lecture seule sur le référentiel, pouvait créer des `Client`/`Driver`/
+    `Team` en important un CSV mentionnant des noms inconnus. Levée par
+    `_get_or_create_by_name(..., allow_create=False)` plutôt que de créer silencieusement.
+    """
+
+    def __init__(self, label: str, name: str) -> None:
+        super().__init__(
+            f"{label} inconnu : « {name} ». Seul le dirigeant peut créer une nouvelle fiche "
+            "depuis un import."
+        )
+
+
 def _get_or_create_by_name(
-    db: Session, model: type, name: str, *, extra: dict | None = None
+    db: Session, model: type, name: str, *, extra: dict | None = None, allow_create: bool
 ) -> int:
     """Résolution CSV : les colonnes `driver`/`team`/`client` sont des **noms**, pas des id.
 
     Décision d'implémentation (non détaillée dans le plan) : *find-or-create* par nom exact,
     cohérent avec `AGENTS.md` (« l'environnement est jetable », pas de dédoublonnage manuel
     attendu pour un import de démonstration). Signalé en revue.
+
+    `allow_create` (revue J1, 🟠) : `False` pour un photographe — seule la *résolution*
+    d'un nom déjà connu lui reste ouverte, la *création* reste `owner` (matrice §3-I,
+    « Clients, circuits, pilotes, écuries : lecture seule » pour `photographer`).
     """
     name_col = "full_name" if model is Driver else "name"
     stmt: Select[Any] = select(model).where(getattr(model, name_col) == name)
     existing = db.execute(stmt).scalar_one_or_none()
     if existing is not None:
         return int(existing.id)
+    if not allow_create:
+        raise _UnknownReferenceError(model.__name__, name)
     kwargs = {name_col: name, **(extra or {})}
     obj = model(**kwargs)
     db.add(obj)
@@ -342,6 +385,10 @@ def import_engagements(
         ).scalars()
     )
 
+    # Revue J1 (🟠) : la création de nouvelles fiches référentiel via l'import reste
+    # réservée au dirigeant — un photographe ne peut résoudre que des noms déjà connus.
+    allow_create_reference = access.is_owner(user)
+
     created = 0
     skipped = 0
     errors: list[EngagementImportError] = []
@@ -364,20 +411,30 @@ def import_engagements(
                 driver_id = None
                 driver_name = (row.get("driver") or "").strip()
                 if driver_name:
-                    driver_id = _get_or_create_by_name(db, Driver, driver_name)
+                    driver_id = _get_or_create_by_name(
+                        db, Driver, driver_name, allow_create=allow_create_reference
+                    )
 
                 client_id = None
                 client_name = (row.get("client") or "").strip()
                 if client_name:
                     client_id = _get_or_create_by_name(
-                        db, Client, client_name, extra={"kind": "team"}
+                        db,
+                        Client,
+                        client_name,
+                        extra={"kind": "team"},
+                        allow_create=allow_create_reference,
                     )
 
                 team_id = None
                 team_name = (row.get("team") or "").strip()
                 if team_name:
                     team_id = _get_or_create_by_name(
-                        db, Team, team_name, extra={"client_id": client_id}
+                        db,
+                        Team,
+                        team_name,
+                        extra={"client_id": client_id},
+                        allow_create=allow_create_reference,
                     )
 
                 car_model = (row.get("car_model") or "").strip() or None
@@ -396,6 +453,8 @@ def import_engagements(
             created += 1
         except IntegrityError as exc:
             errors.append(EngagementImportError(line=line_no, message=str(exc.orig)))
+        except _UnknownReferenceError as exc:
+            errors.append(EngagementImportError(line=line_no, message=str(exc)))
 
     db.commit()
     return EngagementImportResult(created=created, skipped=skipped, errors=errors)

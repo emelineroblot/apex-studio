@@ -178,6 +178,43 @@ class TestDuplicate:
         assert duplicate.duplicate_of_media_id == master.id
         assert duplicate.storage_key_hd == master.storage_key_hd  # un seul objet HD
 
+    def test_duplicate_is_listable_with_its_master_via_media_endpoint(
+        self, client, db_session, shooting_ctx
+    ):
+        """Intégration live J1 : l'onglet « Doublons » était structurellement vide, faute
+        d'un moyen de redemander les doublons à `GET /media`.
+        """
+        shot_at = shooting_ctx["midpoint_paris"].strftime("%Y:%m:%d %H:%M:%S")
+        content = make_valid_jpeg(shot_at=shot_at)
+        headers = shooting_ctx["headers"]
+        batch_id = _upload_and_close(
+            client,
+            headers,
+            shooting_ctx["shooting"]["id"],
+            {"dup-master": content, "dup-copy": content},
+        )
+        _drain_queue()
+
+        master = _media_by_key(db_session, batch_id, "dup-master")
+        duplicate = _media_by_key(db_session, batch_id, "dup-copy")
+
+        default_page = client.get(
+            "/api/v1/media", params={"batch_id": batch_id}, headers=headers
+        ).json()
+        default_ids = {item["id"] for item in default_page["items"]}
+        assert master.id in default_ids
+        assert duplicate.id not in default_ids, (
+            "un doublon ne doit jamais polluer la liste par défaut"
+        )
+
+        duplicates_page = client.get(
+            "/api/v1/media", params={"batch_id": batch_id, "duplicates": True}, headers=headers
+        ).json()
+        duplicates_by_id = {item["id"]: item for item in duplicates_page["items"]}
+        assert master.id not in duplicates_by_id, "le maître n'est pas lui-même un doublon"
+        assert duplicate.id in duplicates_by_id
+        assert duplicates_by_id[duplicate.id]["duplicate_of_media_id"] == master.id
+
 
 class TestBurstSeries:
     def test_burst_is_grouped_with_sharpest_representative(self, client, db_session, shooting_ctx):
@@ -210,6 +247,56 @@ class TestBurstSeries:
         representative = representatives[0]
         others = [m for m in grouped if m.id != representative.id]
         assert all((representative.sharpness or 0) >= (m.sharpness or 0) for m in others)
+
+    def test_grid_collapses_burst_to_one_representative_with_series_count(
+        self, client, db_session, shooting_ctx
+    ):
+        """Intégration live J1 : `MediaSummary` n'exposait ni `series_id` ni le compte de
+        la série — la grille ne pouvait donc pas satisfaire « une rafale est regroupée en
+        série et n'affiche qu'un représentant », quoi que fasse le frontend.
+        """
+        base = shooting_ctx["midpoint_paris"]
+        headers = shooting_ctx["headers"]
+        files = {
+            f"burst-{i}": make_burst_frame(
+                i, shot_at=base + datetime.timedelta(milliseconds=300 * i)
+            )
+            for i in range(5)
+        }
+        batch_id = _upload_and_close(client, headers, shooting_ctx["shooting"]["id"], files)
+        _drain_queue()
+
+        medias = [_media_by_key(db_session, batch_id, key) for key in files]
+        grouped = [m for m in medias if m.series_id is not None]
+        assert len(grouped) >= 2
+        series_id = grouped[0].series_id
+        representative_id = next(m.id for m in grouped if m.is_series_representative)
+        grouped_ids = {m.id for m in grouped}
+
+        collapsed = client.get(
+            "/api/v1/media", params={"batch_id": batch_id}, headers=headers
+        ).json()
+        collapsed_by_id = {item["id"]: item for item in collapsed["items"]}
+        visible_from_series = grouped_ids & collapsed_by_id.keys()
+        assert visible_from_series == {representative_id}, (
+            "par défaut (`series=collapsed`), seul le représentant de la série doit être visible"
+        )
+        summary = collapsed_by_id[representative_id]
+        assert summary["series_id"] == series_id
+        assert summary["series_member_count"] == len(grouped)
+
+        expanded = client.get(
+            "/api/v1/media",
+            params={"batch_id": batch_id, "series": "all"},
+            headers=headers,
+        ).json()
+        expanded_by_id = {item["id"]: item for item in expanded["items"]}
+        assert grouped_ids <= expanded_by_id.keys(), (
+            "`series=all` doit renvoyer tous les membres de la série"
+        )
+        for media_id in grouped_ids:
+            assert expanded_by_id[media_id]["series_id"] == series_id
+            assert expanded_by_id[media_id]["series_member_count"] == len(grouped)
 
 
 class TestUploadIdempotency:

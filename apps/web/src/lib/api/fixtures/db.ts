@@ -3,12 +3,8 @@
  * Réinitialisée à chaque rechargement complet de page (pas de persistance au-delà de
  * `sessionStorage`/`localStorage` gérés ailleurs, ex. la file d'upload).
  *
- * ⚠️ `FixtureUser` n'a **pas** d'équivalent dans le contrat d'API : aucune route
- * `GET /users` n'existe (66 routes recensées, aucune ne liste les comptes internes hors
- * `GET /demo/accounts`, qui n'expose que les 2 comptes de démonstration). C'est un manque
- * de contrat signalé dans `implementation.md` — l'affectation d'équipe (`PUT
- * /shootings/{id}/staff`) ne peut pas, en mode "live", proposer une liste réelle
- * d'employés tant que cette route n'existe pas.
+ * `FixtureUser` rejoue localement `GET /users` (§ correction J1 — voir `implementation.md`) :
+ * peuple le sélecteur d'affectation d'équipe (`PUT /shootings/{id}/staff`) sans appel réseau.
  */
 import type {
   CameraOut,
@@ -26,6 +22,15 @@ import type {
 import { placeholderImage } from "@/lib/api/fixtures/utils";
 
 export type FixtureUser = UserOut;
+
+/**
+ * `uploaded_by` n'existe pas dans `MediaOut`/`MediaSummary` (hors contrat public) mais
+ * conditionne la visibilité côté backend (`services/access.py::media_visibility_clause` :
+ * un média `shooting_id IS NULL` reste visible par son déposant). Champ interne aux
+ * fixtures uniquement, consommé par `fixtures/media.ts` pour rejouer cette règle — voir
+ * `implementation.md`.
+ */
+export type MediaFixture = MediaOut & { uploaded_by: number };
 
 export type FixtureBatch = {
   id: number;
@@ -223,14 +228,15 @@ export const batches: FixtureBatch[] = [
   },
 ];
 
-function buildMedia(): MediaOut[] {
-  const list: MediaOut[] = [];
+function buildMedia(): MediaFixture[] {
+  const list: MediaFixture[] = [];
   let id = 1;
 
-  const push = (partial: Partial<MediaOut> & Pick<MediaOut, "id">) => {
-    const base: MediaOut = {
+  const push = (partial: Partial<MediaFixture> & Pick<MediaFixture, "id">) => {
+    const base: MediaFixture = {
       id: partial.id,
       batch_id: 1,
+      uploaded_by: 2,
       original_filename: `IMG_${1000 + partial.id}.jpg`,
       byte_size: 6_200_000,
       mime: "image/jpeg",
@@ -335,12 +341,15 @@ function buildMedia(): MediaOut[] {
   });
   id += 1;
 
-  // Quarantaine : fichier tronqué.
+  // Quarantaine : fichier tronqué. Clé alignée sur le vrai backend (`pipeline/integrity.py`
+  // ::check_integrity, branche décodage tronqué → `{"error": str(exc)}`) — `bytes_read`/
+  // `bytes_expected` n'ont jamais existé côté API (§ `implementation.md`, régression déjà
+  // trouvée deux fois sur `DETAIL_LABELS`, jamais propagée aux fixtures avant ce lot).
   push({
     id,
     ingest_status: "quarantined",
     quarantine_reason: "truncated_file",
-    quarantine_detail: { bytes_read: 40213, bytes_expected: 6200000 },
+    quarantine_detail: { error: "image file is truncated (12 bytes not processed)" },
     attachment_status: "unattached",
     attachment_source: null,
     shooting_id: null,
@@ -348,14 +357,15 @@ function buildMedia(): MediaOut[] {
   });
   id += 1;
 
-  // Quarantaine : dimensions aberrantes.
+  // Quarantaine : dimensions aberrantes. Clé alignée sur le vrai backend (`expected`, pas
+  // `min_expected` — jamais émis par l'API).
   push({
     id,
     width: 40,
     height: 30,
     ingest_status: "quarantined",
     quarantine_reason: "dimensions_out_of_range",
-    quarantine_detail: { width: 40, height: 30, min_expected: 800 },
+    quarantine_detail: { width: 40, height: 30, expected: "[640..12000]" },
     attachment_status: "unattached",
     attachment_source: null,
     shooting_id: null,
@@ -374,15 +384,20 @@ function buildMedia(): MediaOut[] {
   id += 1;
 
   // Bac « à rattacher » : hors plage horaire avec l'horloge actuelle du boîtier — se
-  // corrige en réglant le décalage d'horloge de la caméra 2 (démo `/cameras`).
+  // corrige en réglant le décalage d'horloge de la caméra 2 (démo `/cameras`). Déposée par
+  // Awa (id 3, propriétaire de la caméra 2) : illustre la visibilité par déposant tant que
+  // le média n'est rattaché à aucun shooting.
   push({
     id,
+    uploaded_by: 3,
     shot_at_exif: "2026-05-02T18:05:00",
     shot_at: null,
     ingest_status: "ingested",
     attachment_status: "unattached",
     attachment_source: null,
-    attachment_detail: { reason: "outside_shooting_window" },
+    // `no_matching_window` (pas `outside_shooting_window`, jamais émis par le backend —
+    // même régression déjà corrigée dans `lib/labels.ts`, jamais propagée ici avant ce lot).
+    attachment_detail: { reason: "no_matching_window" },
     shooting_id: null,
     engagements: [],
     exif: {
@@ -414,13 +429,24 @@ function buildMedia(): MediaOut[] {
   return list;
 }
 
-export const media: MediaOut[] = buildMedia();
+export const media: MediaFixture[] = buildMedia();
 
 export function mediaThumbUrl(item: Pick<MediaOut, "id" | "ingest_status" | "quarantine_reason">): string {
   if (item.ingest_status === "quarantined") {
     return placeholderImage(`Média #${item.id}`, { tone: "#5b1512", sub: item.quarantine_reason ?? "" });
   }
   return placeholderImage(`Média #${item.id}`, { tone: "#1e2434", sub: "Aperçu simulé" });
+}
+
+/**
+ * Rejoue `MediaSeries.member_count` (backend : compteur tenu à jour par `pipeline/series.py`
+ * à l'écriture, pas un `COUNT` recalculé à la volée) — ici un `COUNT` live sur `media` fait
+ * l'affaire : le jeu de fixtures est petit et `media` peut grossir en cours de session
+ * (upload simulé, `fixtures/batches.ts::uploadFile`), donc un compteur figé au chargement du
+ * module dériverait dès le premier upload.
+ */
+function seriesMemberCount(seriesId: number): number {
+  return media.filter((m) => m.series_id === seriesId).length;
 }
 
 export function toSummary(item: MediaOut): MediaSummary {
@@ -433,6 +459,8 @@ export function toSummary(item: MediaOut): MediaSummary {
     shooting_id: item.shooting_id,
     is_simulated: item.is_simulated,
     duplicate_of_media_id: item.duplicate_of_media_id,
+    series_id: item.series_id,
+    series_member_count: item.series_id != null ? seriesMemberCount(item.series_id) : null,
   };
 }
 

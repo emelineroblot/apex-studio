@@ -61,6 +61,12 @@ def regroup_bursts_for_shooting(
         nonlocal materialized
         if len(bucket) < MIN_SERIES_MEMBERS:
             return
+        if bucket[0].camera_id is None:
+            # 🟡 : les médias sans boîtier identifié partagent tous `camera_id IS NULL` —
+            # sans cette garde, deux boîtiers inconnus différents pourraient être regroupés
+            # en une fausse rafale (le tri par `(camera_id, shot_at, id)` les place à la
+            # suite les uns des autres, indiscernables une fois le camera_id perdu).
+            return
         representative = max(
             bucket,
             key=lambda m: (

@@ -28,6 +28,11 @@ TEST_DATABASE_URL = "postgresql+psycopg://apex:apex@localhost:55433/apex_test"
 
 # Doit être posé AVANT tout import de `apex.config` (Settings est mis en cache via
 # `lru_cache` dès le premier import) — sinon les tests tapent la base de dev par erreur.
+# `APP_ENV=local` : depuis le correctif fail-closed (revue J1, suivi du bloquant n°5),
+# `app_env` vaut `"production"` par défaut — sans cette ligne, `Settings()` refuserait de
+# démarrer ici même (aucun `JWT_SECRET`/`WORKER_SECRET` "propre" n'est posé ci-dessous,
+# ce sont volontairement des valeurs de test, pas des secrets de production).
+os.environ.setdefault("APP_ENV", "local")
 os.environ.setdefault("DATABASE_URL", TEST_DATABASE_URL)
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 os.environ.setdefault("WORKER_SECRET", "test-worker-secret")

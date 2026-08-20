@@ -2,8 +2,9 @@
 
 from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 ClientKind = Literal["team", "driver", "sponsor"]
 
@@ -104,9 +105,30 @@ class CameraPatch(BaseModel):
     timezone: str | None = None
     owner_user_id: int | None = None
 
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str | None) -> str | None:
+        """Revue J1 (🟠, scénario du bloquant n°1) : `timezone=""` (ou tout nom invalide)
+        n'était pas validé — `ZoneInfo("")` lève `ValueError` plus tard dans le pipeline
+        d'ingestion, hors du chemin de test habituel. Rejeté ici, au plus tôt, en `422`.
+        """
+        if value is None:
+            return value
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Fuseau horaire inconnu : « {value} ».") from exc
+        return value
+
 
 class CameraPatchResponse(BaseModel):
-    """`reattach_job_id` est non nul si le décalage change : enqueue `reattach_camera`."""
+    """`reattach_job_id` est non nul si le décalage/fuseau change : enqueue
+    `reattach_camera`. `reattached` (revue J1, 🟠) reflète le compte déjà calculé par le
+    handler (`reattach_camera.py`) — `None` si le tick déclenché après l'enqueue n'a pas eu
+    le temps de terminer ce job avant la réponse (file chargée) : l'appelant doit alors
+    suivre `reattach_job_id` via `GET /queue/stats` plutôt que supposer `0`.
+    """
 
     camera: CameraOut
     reattach_job_id: int | None = None
+    reattached: int | None = None

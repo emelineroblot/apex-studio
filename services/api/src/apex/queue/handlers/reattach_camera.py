@@ -30,7 +30,15 @@ def handle_reattach_camera(ctx: JobContext) -> dict[str, Any]:
 
     medias = list(
         session.execute(
-            select(Media).where(Media.camera_id == camera_id, Media.ingest_status == "ingested")
+            select(Media).where(
+                Media.camera_id == camera_id,
+                Media.ingest_status == "ingested",
+                # Revue J1 (🟠) : un doublon mirror l'état de son maître à l'ingestion
+                # (`pipeline/ingest.py`) — le recalculer ici lui donnerait un rattachement
+                # propre, ce qui le rendrait visible dans la grille au même titre qu'un
+                # original, contredisant « un doublon n'affiche qu'un représentant » (§3-G).
+                Media.duplicate_of_media_id.is_(None),
+            )
         ).scalars()
     )
 

@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import ColumnElement, Select, or_, select
 from sqlalchemy.orm import Session
 
+from apex.models.catalog import Camera
 from apex.models.media import Media, UploadBatch
 from apex.models.shooting import Shooting, ShootingStaff
 from apex.models.user import AppUser
@@ -138,3 +139,43 @@ def assert_can_read_batch(session: Session, user: AppUser, batch: UploadBatch) -
     ):
         return
     raise _not_found("Lot")
+
+
+def camera_visibility_clause(user: AppUser) -> ColumnElement[bool] | None:
+    """Condition SQL à `.where()` sur une requête `Camera` (revue J1, 🔴 n°6 : `/cameras`
+    n'était cloisonné pour aucun rôle — un photographe pouvait lister **et** muter le
+    boîtier de n'importe quel collègue).
+
+    `owner` : aucune restriction. `photographer` : le boîtier lui est explicitement
+    affecté (`Camera.owner_user_id`), **ou** il apparaît dans des médias qu'il peut déjà
+    voir (`media_visibility_clause`) — un boîtier découvert automatiquement à l'ingestion
+    (`exif.resolve_camera`, `owner_user_id IS NULL`) reste ajustable par le photographe qui
+    a déposé les photos concernées, sans quoi le critère d'acceptation « un décalage
+    d'horloge corrige rétroactivement le rattachement » serait bloqué derrière le rôle
+    dirigeant sans que la matrice §3-I ne l'exige.
+    """
+    if is_owner(user):
+        return None
+    media_clause = media_visibility_clause(user)
+    visible_media_cameras = select(Media.camera_id).where(Media.camera_id.is_not(None))
+    if media_clause is not None:
+        visible_media_cameras = visible_media_cameras.where(media_clause)
+    return or_(Camera.owner_user_id == user.id, Camera.id.in_(visible_media_cameras))
+
+
+def assert_can_mutate_camera(session: Session, user: AppUser, camera: Camera) -> None:
+    """Garde de `PATCH /cameras/{id}` (revue J1, 🔴 n°6) — même logique que la lecture,
+    appliquée en Python sur une seule ligne déjà chargée plutôt qu'en sous-requête.
+    """
+    if is_owner(user):
+        return
+    if camera.owner_user_id == user.id:
+        return
+    stmt = select(Media.camera_id).where(Media.camera_id.is_not(None))
+    media_clause = media_visibility_clause(user)
+    if media_clause is not None:
+        stmt = stmt.where(media_clause)
+    visible_ids = set(session.execute(stmt).scalars())
+    if camera.id in visible_ids:
+        return
+    raise _not_found("Boîtier")

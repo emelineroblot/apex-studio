@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as batchesApi from "@/lib/api/resources/batches";
-import { friendlyErrorMessage } from "@/lib/api/errors";
+import { ApiError, friendlyErrorMessage } from "@/lib/api/errors";
 import * as store from "@/lib/upload/db";
 import type { BatchMeta, UploadItem } from "@/lib/upload/db";
 
@@ -12,6 +12,18 @@ const BACKOFF_BASE_MS = 800;
 
 function idempotencyKeyFor(batchId: number, file: File): string {
   return `${batchId}:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+/** `detail.media_id` du média créé (déjà en quarantaine) avant le `413` — voir
+ * `routers/batches.py` (`quota_exceeded` / `file_too_large`). Best-effort : le corps
+ * d'erreur est un `unknown` non typé côté client. */
+function extractMediaId(err: ApiError): number | undefined {
+  const detail = err.detail;
+  if (detail && typeof detail === "object" && "media_id" in detail) {
+    const value = (detail as { media_id: unknown }).media_id;
+    return typeof value === "number" ? value : undefined;
+  }
+  return undefined;
 }
 
 export function useUploadQueue() {
@@ -63,6 +75,20 @@ export function useUploadQueue() {
         const result = await batchesApi.uploadFile(item.batchId, item.file, item.id);
         persistItem({ ...uploading, status: "done", mediaId: result.media_id, error: undefined });
       } catch (err) {
+        if (err instanceof ApiError && err.isPayloadRejected) {
+          // État terminal explicite (§ voir `UploadItemStatus`, `implementation.md`) : ni
+          // retry automatique, ni bouton « Réessayer » — un rejeu renverrait un `200`
+          // idempotent sur le média déjà quarantiné et masquerait le vrai résultat.
+          const mediaId = extractMediaId(err);
+          persistItem({
+            ...uploading,
+            status: "rejected",
+            attempts: item.attempts + 1,
+            mediaId,
+            error: friendlyErrorMessage(err),
+          });
+          return;
+        }
         const attempts = item.attempts + 1;
         if (attempts >= MAX_ATTEMPTS) {
           persistItem({ ...uploading, status: "error", attempts, error: friendlyErrorMessage(err) });
@@ -197,6 +223,7 @@ export function useUploadQueue() {
 
   const doneCount = items.filter((it) => it.status === "done").length;
   const errorCount = items.filter((it) => it.status === "error").length;
+  const rejectedCount = items.filter((it) => it.status === "rejected").length;
   const pendingOrUploadingCount = items.filter(
     (it) => it.status === "pending" || it.status === "uploading",
   ).length;
@@ -208,6 +235,7 @@ export function useUploadQueue() {
     running,
     doneCount,
     errorCount,
+    rejectedCount,
     pendingOrUploadingCount,
     total: items.length,
     startBatch,

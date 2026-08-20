@@ -1,7 +1,7 @@
 import { API_MODE } from "@/lib/env";
 import { apiFetchBlob, apiRequest } from "@/lib/api/http";
 import * as fixtures from "@/lib/api/fixtures/media";
-import { visibleShootingIdsForCurrentUser } from "@/lib/api/fixtures/access";
+import { currentUserId, visibleShootingIdsForCurrentUser } from "@/lib/api/fixtures/access";
 import type { IngestStatus, MediaOut, MediaSummary, MediaVariant, Page } from "@/lib/api/types";
 
 export type MediaListParams = {
@@ -12,23 +12,36 @@ export type MediaListParams = {
   quarantined?: boolean;
   cursor?: string | null;
   limit?: number;
-  /** Pas dans le contrat (`GET /media` n'a pas de paramètre dédié aux doublons) : filtre
-   * appliqué côté client sur la page courante uniquement, en fixtures comme en live. */
-  duplicatesOnly?: boolean;
+  /**
+   * `GET /media?duplicates=true` — désormais dans le contrat (`services/api/openapi.json`,
+   * régénéré ce lot) : par défaut (`false`/omis) les doublons sont exclus de la liste,
+   * `true` **n'affiche que** les doublons (jamais mélangés aux non-doublons sur la même
+   * page, symétrique à `unattached`/`quarantined`). Un doublon reste consultable
+   * individuellement via `get(id)` quel que soit ce paramètre.
+   */
+  duplicates?: boolean;
+  /**
+   * `GET /media?series=collapsed|all` — désormais dans le contrat. `collapsed` (défaut
+   * backend) : hors-série + un seul représentant par rafale (critère d'acceptation J1
+   * « une rafale est regroupée en série et n'affiche qu'un représentant »). `all` : tous
+   * les membres, pour ouvrir une série complète depuis sa fiche.
+   */
+  series?: "collapsed" | "all";
 };
 
 export async function list(params: MediaListParams = {}): Promise<Page<MediaSummary>> {
   if (API_MODE === "fixtures") {
     return fixtures.list(
-      { ...params, visibleShootingIds: visibleShootingIdsForCurrentUser() },
+      {
+        ...params,
+        visibleShootingIds: visibleShootingIdsForCurrentUser(),
+        currentUserId: currentUserId(),
+      },
       params.cursor,
       params.limit,
     );
   }
-  const { duplicatesOnly, ...query } = params;
-  const page = await apiRequest<Page<MediaSummary>>("/media", { query });
-  if (!duplicatesOnly) return page;
-  return { ...page, items: page.items.filter((m) => m.duplicate_of_media_id != null) };
+  return apiRequest<Page<MediaSummary>>("/media", { query: params });
 }
 
 export async function get(id: number): Promise<MediaOut> {
@@ -55,4 +68,12 @@ export async function fetchVariantBlob(id: number, variant: MediaVariant): Promi
 export function previewUrl(id: number): string {
   if (API_MODE === "fixtures") return fixtures.previewUrl(id);
   return `/media/${id}/file/preview`;
+}
+
+/** URL de vignette pour un média identifié par id seul (`MediaOut` n'expose pas
+ * `thumb_url`, contrairement à `MediaSummary`) — utilisé pour afficher le maître d'un
+ * doublon dans l'onglet « Doublons » (`DuplicatePairCard`). */
+export function thumbUrl(id: number): string {
+  if (API_MODE === "fixtures") return fixtures.thumbUrl(id);
+  return `/media/${id}/file/thumb`;
 }

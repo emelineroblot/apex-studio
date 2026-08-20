@@ -60,6 +60,27 @@ def _to_webp(img: Image.Image, *, quality: int = WEBP_QUALITY) -> bytes:
 
 
 def build_thumb(img: Image.Image) -> bytes:
+    """Vignette 320 px — **volontairement non filigranée** (revue J1, point d'attention
+    signalé, non corrigé à l'aveugle).
+
+    `pipeline/ingest.py` calcule le pHash (§3-G.2) et la netteté (§3-G.3) directement sur
+    cette vignette : un filigrane cuit dans les pixels y introduirait une texture répétée
+    qui fausserait la DCT basses fréquences (pHash) et la variance de Laplacien
+    (netteté) — deux doublons légitimement identiques pourraient diverger, et le choix du
+    représentant le plus net serait biaisé par la densité du filigrane plutôt que par le
+    contenu réel de la photo.
+
+    §3-H.2 exige que thumb *et* preview soient filigranés une fois servis au client — ce
+    qui reste vrai pour `preview` (`build_watermarked_preview`, ci-dessous). Pour `thumb`,
+    l'écart est assumé pour J1 : elle sert aujourd'hui en interne uniquement (grille photo
+    des rôles `owner`/`photographer`, jamais exposée à un client externe avant J3). Piste
+    retenue pour J3, quand `thumb` sera servie au client (`GET /media/{id}/file/thumb`
+    accessible à la portée « client ») : calculer pHash/netteté sur la vignette **avant**
+    filigrane (ordre déjà respecté ici : cette fonction ne filigrane jamais), puis
+    appliquer un filigrane séparé uniquement sur la variante réellement transmise à un
+    client — sans jamais réutiliser cette même vignette qui, elle, doit rester propre pour
+    le calcul.
+    """
     oriented = ImageOps.exif_transpose(img) or img
     thumb = _resize_max_side(oriented.convert("RGB"), THUMB_MAX_SIDE)
     return _to_webp(thumb)

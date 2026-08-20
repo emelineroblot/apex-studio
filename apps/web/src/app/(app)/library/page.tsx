@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import * as mediaApi from "@/lib/api/resources/media";
 import type { MediaOut, MediaSummary } from "@/lib/api/types";
 import { friendlyErrorMessage } from "@/lib/api/errors";
@@ -11,6 +13,7 @@ import { Badge } from "@/components/ui/Badge";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui/States";
 import { MediaGrid } from "@/components/media/MediaGrid";
 import { QuarantineCard } from "@/components/media/QuarantineCard";
+import { DuplicatePairCard } from "@/components/media/DuplicatePairCard";
 
 const TABS = [
   { id: "all", label: "Tout" },
@@ -22,20 +25,78 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 export default function LibraryPage() {
+  return (
+    <Suspense fallback={<Spinner label="Chargement de la bibliothèque…" />}>
+      <LibraryPageContent />
+    </Suspense>
+  );
+}
+
+/** `useSearchParams()` exige une frontière `Suspense` (§ Next.js — sinon `next build`
+ * échoue sur "missing-suspense-with-csr-bailout") — isolé dans un composant enfant. */
+function LibraryPageContent() {
   const [tab, setTab] = useState<TabId>("all");
+  const searchParams = useSearchParams();
+
+  // Ouverture d'une rafale complète depuis `MediaGrid` (§ tâche 2, `GET /media?series=all`
+  // — pas de paramètre `series_id` dans le contrat : on récupère la page `series=all`
+  // scopée au shooting d'origine puis on filtre côté client sur `series_id`, cf.
+  // `MediaGrid.seriesUrl`).
+  const seriesParam = searchParams.get("series");
+  const seriesId = seriesParam ? Number(seriesParam) : null;
+  const shootingParam = searchParams.get("shooting");
+  const shootingId = shootingParam ? Number(shootingParam) : undefined;
 
   const { data, loading, error, reload } = useAsync(
     () =>
-      mediaApi.list({
-        limit: 100,
-        unattached: tab === "unattached" ? true : undefined,
-        quarantined: tab === "quarantined" ? true : undefined,
-        duplicatesOnly: tab === "duplicates" ? true : undefined,
-      }),
-    [tab],
+      seriesId != null
+        ? mediaApi.list({ series: "all", shooting_id: shootingId, limit: 100 })
+        : mediaApi.list({
+            limit: 100,
+            unattached: tab === "unattached" ? true : undefined,
+            quarantined: tab === "quarantined" ? true : undefined,
+            duplicates: tab === "duplicates" ? true : undefined,
+          }),
+    [tab, seriesId, shootingId],
   );
 
-  const items = data?.items ?? [];
+  const items = useMemo(() => {
+    const all = data?.items ?? [];
+    if (seriesId == null) return all;
+    return all.filter((m) => m.series_id === seriesId);
+  }, [data, seriesId]);
+
+  if (seriesId != null) {
+    return (
+      <div>
+        <Link href="/library" className="text-sm text-ink-500 hover:text-accent-600">
+          ← Retour à la bibliothèque
+        </Link>
+        <PageHeader
+          title={`Série #${seriesId}`}
+          description={
+            items.length > 0
+              ? `${items.length} cliché${items.length > 1 ? "s" : ""} de cette rafale.`
+              : "Rafale groupée automatiquement par proximité temporelle et visuelle."
+          }
+        />
+        <div className="mt-5">
+          {loading ? <Spinner label="Chargement de la série…" /> : null}
+          {error ? <ErrorState message={friendlyErrorMessage(error)} onRetry={reload} /> : null}
+          {!loading && !error ? (
+            items.length === 0 ? (
+              <EmptyState
+                title="Série introuvable"
+                description="Cette série n'a pas (ou plus) de membres visibles depuis ce shooting."
+              />
+            ) : (
+              <MediaGrid items={items} showSeriesBadge={false} />
+            )
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -64,6 +125,8 @@ export default function LibraryPage() {
             <EmptyState title={EMPTY_TITLES[tab]} description={EMPTY_DESCRIPTIONS[tab]} />
           ) : tab === "quarantined" ? (
             <QuarantineList items={items} />
+          ) : tab === "duplicates" ? (
+            <DuplicateList items={items} />
           ) : (
             <MediaGrid items={items} />
           )
@@ -118,6 +181,57 @@ function QuarantineList({ items }: { items: MediaSummary[] }) {
         const full = details.get(item.id);
         if (!full) return null;
         return <QuarantineCard key={item.id} media={full} thumbUrl={item.thumb_url} />;
+      })}
+    </div>
+  );
+}
+
+/**
+ * Un doublon **présenté avec son maître** (§ tâche 2) — `GET /media?duplicates=true` ne
+ * renvoie que les doublons eux-mêmes ; le maître (`duplicate_of_media_id`) est chargé à
+ * part, un seul appel par maître unique (plusieurs doublons peuvent partager le même
+ * maître, ex. un 3ᵉ exemplaire identique).
+ */
+function DuplicateList({ items }: { items: MediaSummary[] }) {
+  const [masters, setMasters] = useState<Map<number, MediaOut> | null>(null);
+  const [error, setError] = useState<unknown>(null);
+
+  const masterIds = useMemo(
+    () => [...new Set(items.map((item) => item.duplicate_of_media_id).filter((id): id is number => id != null))],
+    [items],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setMasters(null);
+    Promise.all(masterIds.map((id) => mediaApi.get(id)))
+      .then((results) => {
+        if (cancelled) return;
+        setMasters(new Map(results.map((r) => [r.id, r])));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [masterIds]);
+
+  if (error) return <ErrorState message={friendlyErrorMessage(error)} />;
+  if (!masters) return <Spinner label="Chargement des maîtres…" />;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {items.map((item) => {
+        const master = item.duplicate_of_media_id != null ? masters.get(item.duplicate_of_media_id) : undefined;
+        return (
+          <DuplicatePairCard
+            key={item.id}
+            duplicate={item}
+            master={master}
+            masterThumbUrl={master ? mediaApi.thumbUrl(master.id) : ""}
+          />
+        );
       })}
     </div>
   );

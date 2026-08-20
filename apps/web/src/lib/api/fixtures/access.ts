@@ -12,3 +12,9 @@ export function visibleShootingIdsForCurrentUser(): number[] | null {
   if (user.role === "owner") return null; // null = pas de restriction
   return shootings.filter((s) => s.staff.some((m) => m.user_id === user.id)).map((s) => s.id);
 }
+
+/** Utilisé en complément de `visibleShootingIdsForCurrentUser` pour rejouer la clause
+ * `Media.uploaded_by == user.id` de `services/access.py::media_visibility_clause`. */
+export function currentUserId(): number | null {
+  return getCurrentUser()?.id ?? null;
+}

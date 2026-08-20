@@ -1767,6 +1767,30 @@
             }
           },
           {
+            "name": "duplicates",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Duplicates"
+            }
+          },
+          {
+            "name": "series",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "collapsed",
+                "all"
+              ],
+              "type": "string",
+              "default": "collapsed",
+              "title": "Series"
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "required": false,
@@ -2219,6 +2243,36 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Liste des comptes internes (id, nom, rôle) — pour l'affectation d'équipe",
+        "operationId": "list_users_api_v1_users_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserSummary"
+                  },
+                  "type": "array",
+                  "title": "Response List Users Api V1 Users Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/queue/stats": {
@@ -4860,6 +4914,17 @@
               }
             ],
             "title": "Reattach Job Id"
+          },
+          "reattached": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reattached"
           }
         },
         "type": "object",
@@ -4867,7 +4932,7 @@
           "camera"
         ],
         "title": "CameraPatchResponse",
-        "description": "`reattach_job_id` est non nul si le décalage change : enqueue `reattach_camera`."
+        "description": "`reattach_job_id` est non nul si le décalage/fuseau change : enqueue\n`reattach_camera`. `reattached` (revue J1, 🟠) reflète le compte déjà calculé par le\nhandler (`reattach_camera.py`) — `None` si le tick déclenché après l'enqueue n'a pas eu\nle temps de terminer ce job avant la réponse (file chargée) : l'appelant doit alors\nsuivre `reattach_job_id` via `GET /queue/stats` plutôt que supposer `0`."
       },
       "CircuitCreate": {
         "properties": {
@@ -6888,6 +6953,28 @@
               }
             ],
             "title": "Duplicate Of Media Id"
+          },
+          "series_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Id"
+          },
+          "series_member_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Member Count"
           }
         },
         "type": "object",
@@ -6899,7 +6986,9 @@
           "attachment_status",
           "shooting_id",
           "is_simulated",
-          "duplicate_of_media_id"
+          "duplicate_of_media_id",
+          "series_id",
+          "series_member_count"
         ],
         "title": "MediaSummary"
       },
@@ -9042,6 +9131,33 @@
           "role"
         ],
         "title": "UserOut"
+      },
+      "UserSummary": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "photographer"
+            ],
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "full_name",
+          "role"
+        ],
+        "title": "UserSummary"
       },
       "ValidationError": {
         "properties": {

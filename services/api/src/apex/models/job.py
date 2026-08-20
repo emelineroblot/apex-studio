@@ -39,13 +39,17 @@ class Job(Base):
             "id",
             postgresql_where=text("status = 'pending'"),
         ),
-        # Anti-doublon d'enqueue : un seul job vivant par (kind, dedupe_key).
+        # Anti-doublon d'enqueue : au plus un job `pending` par (kind, dedupe_key).
+        # Correction revue J1 (🟠, `queue/enqueue.py`) : ne couvre plus `running` — un job
+        # en cours d'exécution ne doit jamais bloquer l'enqueue d'un successeur, sous peine
+        # de perdre silencieusement un signal de recalcul (`finalize_batch` bloqué en
+        # `processing`, cf. docstring d'`enqueue.py`).
         Index(
             "job_dedupe_idx",
             "kind",
             "dedupe_key",
             unique=True,
-            postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('pending','running')"),
+            postgresql_where=text("dedupe_key IS NOT NULL AND status = 'pending'"),
         ),
         # Détection des jobs orphelins après crash.
         Index(

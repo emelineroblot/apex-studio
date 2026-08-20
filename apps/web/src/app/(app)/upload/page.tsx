@@ -112,10 +112,17 @@ export default function UploadPage() {
 
           {hasActiveBatch && queue.total > 0 && !hasPendingWork && !queue.running ? (
             <div className="mb-4">
-              <Notice tone={queue.errorCount > 0 ? "warn" : "ok"}>
-                {queue.errorCount > 0
-                  ? `${queue.errorCount} fichier(s) en échec après plusieurs tentatives — corrigez-les ou continuez sans eux.`
-                  : "Tous les fichiers ont été envoyés."}
+              <Notice tone={queue.errorCount > 0 || queue.rejectedCount > 0 ? "warn" : "ok"}>
+                {[
+                  queue.errorCount > 0
+                    ? `${queue.errorCount} fichier(s) en échec après plusieurs tentatives — corrigez-les ou continuez sans eux.`
+                    : null,
+                  queue.rejectedCount > 0
+                    ? `${queue.rejectedCount} fichier(s) refusé(s) (quota dépassé ou taille excessive) — déjà en quarantaine, aucune reprise possible depuis cet écran.`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ") || "Tous les fichiers ont été envoyés."}
               </Notice>
             </div>
           ) : null}
