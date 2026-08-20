@@ -1,0 +1,57 @@
+# --- Cadrage & agents (jamais versionnés) ---
+contexte/
+.claude/
+CLAUDE.local.md
+.agent-team/
+.seo-team/
+.team-autom/
+.content-team/
+.brainstorm/
+.next-tool/
+
+# --- Secrets & environnement ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# --- Next.js / Node ---
+node_modules/
+.next/
+out/
+build/
+dist/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# --- Vercel ---
+.vercel
+
+# --- Médias & données locales (jamais dans le dépôt) ---
+media/
+uploads/
+storage/
+*.sqlite3
+demo-photos/
+
+# --- OS & éditeurs ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
