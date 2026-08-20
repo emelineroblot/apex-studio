@@ -38,24 +38,35 @@ class JobContext:
 # (persisté dans `job.result`) ou `None`.
 HandlerFunc = Callable[[JobContext], dict[str, Any] | None]
 
+# Appelé quand un job de ce `kind` passe à `dead` (retries épuisés) **par `reap_stale`**
+# (worker mort/silencieux, §3-E.5) — reçoit `(session, job)`, dans la même transaction que
+# la bascule `dead`. Doit produire un effet métier lisible (ex. quarantaine) : « aucun job
+# mort ne laisse un objet métier dans un état intermédiaire » (§3-E.5).
+OnDeadFunc = Callable[["Session", "Job"], None]
+
 
 @dataclass(frozen=True, slots=True)
 class HandlerSpec:
     kind: str
     func: HandlerFunc
     max_attempts: int
+    on_dead: OnDeadFunc | None = None
 
 
 _REGISTRY: dict[str, HandlerSpec] = {}
 
 
-def handler(kind: str, *, max_attempts: int = 3) -> Callable[[HandlerFunc], HandlerFunc]:
+def handler(
+    kind: str, *, max_attempts: int = 3, on_dead: OnDeadFunc | None = None
+) -> Callable[[HandlerFunc], HandlerFunc]:
     """Décorateur d'enregistrement — `@handler("ingest_media", max_attempts=3)`."""
 
     def decorator(func: HandlerFunc) -> HandlerFunc:
         if kind in _REGISTRY:
             raise ValueError(f"Handler déjà enregistré pour le type de job « {kind} ».")
-        _REGISTRY[kind] = HandlerSpec(kind=kind, func=func, max_attempts=max_attempts)
+        _REGISTRY[kind] = HandlerSpec(
+            kind=kind, func=func, max_attempts=max_attempts, on_dead=on_dead
+        )
         return func
 
     return decorator

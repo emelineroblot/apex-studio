@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     s3_bucket: str = "apex-dev"
     s3_access_key_id: str = "changeme"
     s3_secret_access_key: str = "changeme"
+    # `local` par défaut (§5 du plan : dev/tests sans compte Cloudflare) ; `s3` en prod.
+    storage_backend: str = "local"
+    storage_local_dir: str = "./storage"
 
     # --- Frontend / liens publics ---
     web_origin: str = "http://localhost:3000"

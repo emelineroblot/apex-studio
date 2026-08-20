@@ -12,7 +12,11 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "python-jose[cryptography]>=3.3",
-    "passlib[bcrypt]>=1.7",
+    # `bcrypt` en direct, pas `passlib[bcrypt]` (§3-I) : `passlib==1.7.4` sonde
+    # `bcrypt.__about__.__version__`, retiré depuis `bcrypt>=4.1` — casse *avant* de
+    # hacher (`AttributeError` puis `ValueError` trompeur), reproduit en conditions
+    # réelles. Voir `apex/security.py` pour le détail de l'écart.
+    "bcrypt>=4.1",
     "boto3>=1.35",
     "pillow>=10.4",
     "numpy>=2.1",
@@ -88,7 +92,7 @@ module = "alembic.versions.*"
 ignore_errors = true
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 markers = [
     "ocr_eval: évaluation OCR offline sur jeu synthétique (J2, hors suite par défaut)",

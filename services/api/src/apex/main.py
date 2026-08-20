@@ -13,8 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+import apex.queue.handlers  # noqa: F401 — charge les handlers dans le registre (§3-E.3)
 from apex.config import settings
-from apex.db import engine
+from apex.db import SessionLocal, engine
+from apex.demo.accounts import ensure_demo_users
 from apex.routers import (
     auth,
     batches,
@@ -118,6 +120,20 @@ app.include_router(cron.router, prefix=API_PREFIX)
 # `public` est un routeur dédié, cloisonné, sans identifiant de ressource en paramètre
 # (§3-L.3) — préfixe propre, pas de PREFIX interne partagé avec le reste de l'API.
 app.include_router(public.router, prefix=f"{API_PREFIX}/public")
+
+
+@app.on_event("startup")
+def _bootstrap_demo_users() -> None:
+    """Garantit l'existence des 2 comptes de démo (§3-I) — idempotent, base réelle."""
+    db = SessionLocal()
+    try:
+        ensure_demo_users(db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @app.get("/api/v1/health", tags=["health"], summary="Vérification de disponibilité")

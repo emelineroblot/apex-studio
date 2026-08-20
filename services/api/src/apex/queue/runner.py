@@ -94,6 +94,18 @@ def _process_one(session: Session, job: Job, worker_id: str, result: DrainResult
     except Exception as exc:  # noqa: BLE001 — capture volontairement large : un handler
         # ne doit jamais planter le worker, quelle que soit l'erreur.
         message = f"{type(exc).__name__}: {exc}"
+        # Un handler qui lève après un `flush()` en échec (ex. contrainte DB) laisse la
+        # session en « pending rollback » : tout `commit()` ultérieur lève à son tour et
+        # crashe le worker au lieu de consigner l'échec — reproduit en conditions réelles
+        # (`NumericValueOutOfRange` sur un `flush()` intermédiaire). Rollback explicite
+        # avant de rouvrir une transaction propre, puis on ré-attache `job` (le rollback
+        # expire les instances de la session).
+        session.rollback()
+        refreshed = session.get(Job, job.id)
+        if refreshed is None:
+            result.errors.append(message)
+            return
+        job = refreshed
         if job.attempts >= job.max_attempts:
             job.status = "dead"
             job.last_error = message

@@ -9,15 +9,12 @@ verrou logique pendant tout le traitement (§3-E.2, Option 2 retenue).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from apex.models.job import Job
-
-if TYPE_CHECKING:
-    from sqlalchemy.engine import CursorResult
+from apex.queue.registry import get_handler
 
 # Seuil de détection des jobs orphelins : un job `running` sans heartbeat depuis plus
 # longtemps que ça est considéré mort (§3-E.5). Volontairement inférieur au
@@ -50,7 +47,7 @@ _REAP_SQL = text(
            last_error = coalesce(last_error, '') || ' | repris après worker silencieux',
            updated_at = now()
      WHERE status = 'running' AND heartbeat_at < :stale_before
-    RETURNING id, status
+    RETURNING id, status, kind
     """
 )
 
@@ -72,12 +69,30 @@ def reap_stale(session: Session, *, stale_after: timedelta = STALE_AFTER) -> int
     """Repasse en `pending` (ou `dead` si épuisé) les jobs `running` orphelins (§3-E.5).
 
     Committe immédiatement — appelé en tête de chaque `drain()`, avant toute réclamation.
-    Renvoie le nombre de jobs repris.
+    Pour tout job passé à `dead`, dispatche le hook `on_dead` du handler enregistré (s'il
+    existe) **dans la même transaction** que la bascule d'état — « aucun job mort ne laisse
+    un objet métier dans un état intermédiaire » (§3-E.5). Renvoie le nombre de jobs repris.
     """
     stale_before = datetime.now(UTC) - stale_after
-    result = session.execute(_REAP_SQL, {"stale_before": stale_before})
-    # `.rowcount` existe bien à l'exécution (CursorResult, DML) — les stubs `Result[Any]`
-    # génériques de SQLAlchemy ne l'exposent pas statiquement.
-    reaped = cast("CursorResult[Any]", result).rowcount
+    rows = list(session.execute(_REAP_SQL, {"stale_before": stale_before}))
+    reaped = len(rows)
     session.commit()
+
+    for row in rows:
+        if row.status != "dead":
+            continue
+        spec = get_handler(row.kind)
+        if spec is None or spec.on_dead is None:
+            continue
+        job = session.execute(select(Job).where(Job.id == row.id)).scalar_one_or_none()
+        if job is None:
+            continue
+        try:
+            spec.on_dead(session, job)
+            session.commit()
+        except Exception:  # noqa: BLE001 — un hook `on_dead` défaillant ne doit jamais
+            # empêcher le reste du drainage ; l'état `dead` du job, déjà committé, reste
+            # visible et actionnable manuellement.
+            session.rollback()
+
     return reaped

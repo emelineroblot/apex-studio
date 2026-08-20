@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+/*
+ * Palette Apex — sobre, forte lisibilité en projection (démo).
+ * Thème clair unique et volontaire (pas de bascule sombre automatique) :
+ * une démo en visio ne doit jamais dépendre des réglages système du public.
+ */
+@theme {
+  --color-ink-950: #0b0f17;
+  --color-ink-900: #121826;
+  --color-ink-800: #1e2434;
+  --color-ink-700: #2a3244;
+  --color-ink-600: #414c63;
+  --color-ink-500: #5b667e;
+  --color-ink-400: #7c869c;
+  --color-ink-300: #a6afc0;
+  --color-ink-200: #ced4e0;
+  --color-ink-100: #e6e9f0;
+  --color-ink-50: #f4f5f9;
+
+  --color-accent-700: #b8410a;
+  --color-accent-600: #d9500e;
+  --color-accent-500: #f0621c;
+  --color-accent-400: #ff8a4c;
+  --color-accent-100: #ffe4d1;
+  --color-accent-50: #fff3ea;
+
+  --color-ok-600: #157a4f;
+  --color-ok-500: #1e9564;
+  --color-ok-100: #d8f3e6;
+
+  --color-warn-600: #a1650a;
+  --color-warn-500: #c2820f;
+  --color-warn-100: #fbedcc;
+
+  --color-danger-600: #b3261e;
+  --color-danger-500: #d63b31;
+  --color-danger-100: #fbdbd8;
+
+  --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--color-ink-50);
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+}
+
+/* Focus clavier toujours visible — accessibilité systématique (§ exigences qualité). */
+:focus-visible {
+  outline: 2px solid var(--color-accent-600);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--color-accent-100);
+  color: var(--color-ink-900);
+}

@@ -4,6 +4,7 @@
 
 from fastapi import APIRouter, Security
 
+from apex.demo.accounts import demo_account_specs
 from apex.routers._common import bearer_scheme, not_implemented
 from apex.schemas.auth import DemoAccount
 from apex.schemas.billing import DemoResetResponse
@@ -17,7 +18,10 @@ router = APIRouter(prefix="/demo", tags=["demo"])
     summary="Comptes de démo pré-remplis (public)",
 )
 def demo_accounts() -> list[DemoAccount]:
-    not_implemented("GET /demo/accounts")
+    return [
+        DemoAccount(role=spec.role, email=spec.email, password=spec.password, label=spec.label)
+        for spec in demo_account_specs()
+    ]
 
 
 @router.post(

@@ -13,11 +13,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from apex.models.job import Job
+
+# Doit correspondre **exactement** au prédicat de l'index unique partiel `job_dedupe_idx`
+# (`models/job.py`) : PostgreSQL n'infère une cible `ON CONFLICT` sur un index partiel que
+# si le `WHERE` de la clause reproduit celui de l'index — sinon `InvalidColumnReference`
+# (« there is no unique or exclusion constraint matching the ON CONFLICT specification »),
+# reproduit en conditions réelles lors du premier upload transactionnel.
+_DEDUPE_INDEX_WHERE = text("dedupe_key IS NOT NULL AND status IN ('pending','running')")
 
 
 def enqueue(
@@ -56,7 +63,9 @@ def enqueue(
     stmt = (
         pg_insert(Job)
         .values(**values)
-        .on_conflict_do_nothing(index_elements=["kind", "dedupe_key"])
+        .on_conflict_do_nothing(
+            index_elements=["kind", "dedupe_key"], index_where=_DEDUPE_INDEX_WHERE
+        )
         .returning(Job.id)
     )
     inserted_id = session.execute(stmt).scalar_one_or_none()
