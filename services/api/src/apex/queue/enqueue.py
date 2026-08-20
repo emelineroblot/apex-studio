@@ -106,11 +106,24 @@ def enqueue_unique_pending(session: Session, kind: str, dedupe_key: str) -> int 
     Utilitaire de lecture — pratique pour exposer l'id existant à l'appelant (ex.
     `PATCH /cameras/{id}` veut renvoyer `reattach_job_id` même quand il réutilise un job
     déjà en file).
+
+    **Correctif revue J1 (🟠)** : depuis que l'index de dédoublonnage ne couvre plus que
+    `status = 'pending'` (cf. `_DEDUPE_INDEX_WHERE` ci-dessus), il est désormais normal
+    d'avoir simultanément un job `running` et un job `pending` vivants pour le même
+    `(kind, dedupe_key)` — `scalar_one_or_none()` levait alors `MultipleResultsFound`
+    (`500` sur `PATCH /cameras/{id}`). On prend le plus récent (`id` décroissant) : c'est
+    celui que l'`INSERT ... ON CONFLICT DO NOTHING` vient d'accepter en no-op, donc celui
+    que l'appelant veut suivre.
     """
-    stmt = select(Job.id).where(
-        Job.kind == kind,
-        Job.dedupe_key == dedupe_key,
-        Job.status.in_(("pending", "running")),
+    stmt = (
+        select(Job.id)
+        .where(
+            Job.kind == kind,
+            Job.dedupe_key == dedupe_key,
+            Job.status.in_(("pending", "running")),
+        )
+        .order_by(Job.id.desc())
+        .limit(1)
     )
     result = session.execute(stmt).scalar_one_or_none()
     return int(result) if result is not None else None

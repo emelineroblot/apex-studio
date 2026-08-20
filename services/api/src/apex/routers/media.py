@@ -112,7 +112,19 @@ def list_media(
     # fiche) — nommage symétrique au `series=collapsed|all` déjà prévu pour `GET /search`
     # (§3-K.2 du plan).
     if series == "collapsed":
-        stmt = stmt.where(or_(Media.series_id.is_(None), Media.is_series_representative.is_(True)))
+        # Revue J1 (🔴) : défense en profondeur, indépendante du correctif source dans
+        # `reattach_camera` — un média sans shooting ne peut légitimement appartenir à
+        # aucune série, quelle que soit la fraîcheur de `series_id`/
+        # `is_series_representative` en base (ex. un recalcul de rattachement qui aurait
+        # laissé le média orphelin sans requalifier sa série). Cette clause rend
+        # structurellement impossible qu'un tel orphelin soit masqué par le collapse.
+        stmt = stmt.where(
+            or_(
+                Media.series_id.is_(None),
+                Media.is_series_representative.is_(True),
+                Media.shooting_id.is_(None),
+            )
+        )
     visibility = access.media_visibility_clause(user)
     if visibility is not None:
         stmt = stmt.where(visibility)
