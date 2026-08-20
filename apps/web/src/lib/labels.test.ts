@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { QUARANTINE_REASONS, UNATTACHED_REASONS } from "@/lib/api/types";
 import {
   QUARANTINE_REASON_LABELS,
   UNATTACHED_REASON_LABELS,
@@ -15,34 +16,15 @@ import {
  * - `QuarantineCard.DETAIL_LABELS` attendait `bytes_read`/`bytes_expected`/`min_expected`,
  *   jamais émis (`pipeline/integrity.py`, `routers/batches.py`).
  *
- * Ce test fige, côté frontend, la liste des clés que le backend émet réellement — relue
- * directement dans le code source Python à la date de ce lot (pas copiée depuis un
- * commentaire) — pour que toute divergence future échoue ici plutôt qu'en intégration.
+ * `quarantine_reason` et `attachment_detail.reason` sont désormais de vrais enums du
+ * contrat OpenAPI (§ « Correction de suivi — Contrat OpenAPI des motifs de quarantaine/
+ * rattachement », `implementation.md`) : `QUARANTINE_REASONS`/`UNATTACHED_REASONS`
+ * (`lib/api/types.ts`) sont dérivées de `schema.d.ts` (généré, `npm run gen:api`), pas
+ * recopiées à la main ici — ce test ne duplique donc plus une liste indépendante, il
+ * confronte les dictionnaires de libellés à la liste réellement issue du contrat.
  */
-
-// `apex.models.media.QUARANTINE_REASONS` (services/api/src/apex/models/media.py).
-const BACKEND_QUARANTINE_REASONS = [
-  "truncated_file",
-  "not_an_image",
-  "unsupported_mime",
-  "dimensions_out_of_range",
-  "aspect_ratio_out_of_range",
-  "exif_inconsistent",
-  "too_large",
-  "quota_exceeded",
-  "ingest_failed",
-  "orphan_object",
-] as const;
-
-// Motifs réellement écrits dans `media.attachment_detail.reason` par le pipeline
-// (`pipeline/attach_time.py::attach_media_by_time`) : `no_exif_timestamp`,
-// `no_matching_window`, `ambiguous_window`. `outside_shooting_window` n'existe nulle part
-// côté backend — sa présence ici serait la régression déjà trouvée une fois.
-const BACKEND_UNATTACHED_REASONS = [
-  "no_exif_timestamp",
-  "no_matching_window",
-  "ambiguous_window",
-] as const;
+const BACKEND_QUARANTINE_REASONS = QUARANTINE_REASONS;
+const BACKEND_UNATTACHED_REASONS = UNATTACHED_REASONS;
 
 describe("QUARANTINE_REASON_LABELS", () => {
   it("couvre chaque motif de l'énumération fermée du backend", () => {

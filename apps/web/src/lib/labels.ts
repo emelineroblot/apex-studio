@@ -33,9 +33,12 @@ export const ATTACHMENT_STATUS_LABELS: Record<AttachmentStatus, string> = {
 };
 
 /**
- * §3-F.2 du plan, énumération fermée `QUARANTINE_REASONS` de `apex/models/media.py`.
- * Toute valeur inconnue (contrat qui évoluerait) retombe sur un libellé générique plutôt
- * que d'afficher le code technique brut.
+ * §3-F.2 du plan, énumération fermée `QUARANTINE_REASONS` de `apex/models/media.py`,
+ * désormais un vrai enum OpenAPI (`QuarantineReason` dérivé de `schema.d.ts`, § `lib/api/
+ * types.ts`) : ce `Record` est exhaustif au sens du compilateur, pas seulement au sens du
+ * commentaire. Le repli via `quarantineReasonLabel` reste utile en défense pour une
+ * valeur qui apparaîtrait à l'exécution sans être encore reflétée par une régénération du
+ * contrat (`npm run gen:api` pas encore relancé après une évolution backend).
  */
 export const QUARANTINE_REASON_LABELS: Record<QuarantineReason, string> = {
   truncated_file: "Fichier tronqué à l'envoi",
@@ -56,11 +59,11 @@ export function quarantineReasonLabel(reason: string | null | undefined): string
 }
 
 /**
- * Motifs du bac « à rattacher » — vivent dans `attachment_detail.reason` (JSON libre côté
- * backend, non typé dans l'OpenAPI — voir `UnattachedReason` dans `lib/api/types.ts` pour
- * le détail du trou de contrat). Typé `Record<UnattachedReason, string>` : comme
- * `QUARANTINE_REASON_LABELS` ci-dessus, un motif retiré ici est désormais une erreur de
- * type, pas un affichage dégradé à l'exécution.
+ * Motifs du bac « à rattacher » — vivent dans `attachment_detail.reason`, désormais un
+ * vrai enum OpenAPI (`AttachmentDetail.reason` dans le contrat, § `lib/api/types.ts`).
+ * Typé `Record<UnattachedReason, string>` : comme `QUARANTINE_REASON_LABELS` ci-dessus,
+ * un motif retiré ici (ou ajouté côté backend sans régénération) est désormais une erreur
+ * de type, pas un affichage dégradé constaté en intégration.
  *
  * Correction passe d'intégration live J1 : `outside_shooting_window` n'est **jamais** émis
  * par le backend (`pipeline/attach_time.py`) — la vraie clé est `no_matching_window`
@@ -85,10 +88,10 @@ export function unattachedReasonLabel(detail: unknown): string {
 }
 
 /**
- * `ShootingOut.status` **est** un vrai enum OpenAPI (`@enum {string}` dans `schema.d.ts`,
- * contrairement à `quarantine_reason`/`attachment_detail.reason` ci-dessus) — typé
- * `Record<ShootingStatus, string>` : ici, le garde-fou de compilation est directement
- * dérivé du contrat généré, pas d'un mirroir manuel.
+ * `ShootingOut.status` — vrai enum OpenAPI (`@enum {string}` dans `schema.d.ts`), typé
+ * `Record<ShootingStatus, string>` : même garde-fou de compilation, dérivé directement du
+ * contrat généré (comme `QuarantineReason`/`UnattachedReason` ci-dessus depuis leur
+ * fermeture de contrat).
  */
 export const SHOOTING_STATUS_LABELS: Record<ShootingStatus, string> = {
   planned: "Programmé",

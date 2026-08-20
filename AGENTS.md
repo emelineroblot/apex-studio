@@ -61,7 +61,57 @@ Le cadrage complet est dans `contexte/brief-app-b-studio-photo.md` (non versionn
 
 ## Commandes
 
-À compléter par l'architecte au premier jalon (build, test, lint, migrations, worker).
+**Bases locales** (à la racine) — PostgreSQL 18, jetables :
+
+```bash
+docker compose up -d          # dev sur 55432, tests sur 55433 (tmpfs)
+docker compose down -v        # tout jeter
+```
+
+**Backend** (depuis `services/api`) :
+
+```bash
+uv sync
+uv run alembic upgrade head
+uv run uvicorn apex.main:app --reload --port 8000
+uv run python -m apex.cli worker --loop     # worker : boucle de drainage
+uv run python -m apex.cli worker --once     # un seul tick (utilisé en serverless)
+uv run python -m apex.cli seed --reset      # régénère le jeu de démo
+uv run pytest -q
+uv run ruff check . && uv run ruff format --check . && uv run mypy src
+uv export --no-dev --format requirements-txt > requirements.txt
+```
+
+**Frontend** (depuis `apps/web`) :
+
+```bash
+npm install
+npm run dev / build / lint / typecheck
+npm run gen:api        # types TS depuis services/api/openapi.json
+npx vitest run
+```
+
+### Deux pièges d'exécution, appris à nos dépens
+
+- **Ne jamais lancer deux `pytest` concurrents.** Il n'y a **qu'une** base de test (`55433`), et
+  `conftest.py` la réinitialise par `DROP SCHEMA`. Deux exécutions simultanées s'interbloquent dans
+  PostgreSQL. Si un jour plusieurs agents doivent tester en parallèle, il faudra une base (ou un
+  schéma) par exécutant — pas un simple retry.
+- **`openapi.json` est le contrat, et il se régénère.** Toute évolution des schémas backend doit être
+  suivie d'une régénération, puis d'un `npm run gen:api` côté frontend. Un frontend qui code contre
+  un contrat périmé compile parfaitement et casse en production.
+
+## Variables d'environnement
+
+Voir `services/api/.env.example` pour la liste complète. Deux méritent une mention :
+
+- **`APP_ENV`** — `local` en développement, autre chose ailleurs. Le défaut est **`production`**,
+  volontairement : c'est un garde-fou *fail-closed*. L'application **refuse de démarrer** si un secret
+  (`JWT_SECRET`, `WORKER_SECRET`, `CRON_SECRET`, mots de passe de démo) a encore sa valeur du dépôt
+  alors que `APP_ENV != local`. Le dépôt est public : ces valeurs sont connues de tous, donc forgeables.
+  Un premier correctif avait fait de `local` le défaut, ce qui rendait le garde-fou inopérant
+  précisément dans le cas visé — la variable oubliée au déploiement.
+- **`STORAGE_BACKEND`** — `local` (écrit dans `./storage`, gitignoré) ou `s3`.
 
 ## Jalons
 

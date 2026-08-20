@@ -4559,6 +4559,39 @@
   },
   "components": {
     "schemas": {
+      "AttachmentDetail": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "no_exif_timestamp",
+              "no_matching_window",
+              "ambiguous_window"
+            ],
+            "title": "Reason"
+          },
+          "candidate_shooting_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Shooting Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "AttachmentDetail",
+        "description": "Motif de non-rattachement (`attachment_detail` quand `attachment_status='unattached'`),\nécrit par `apex/pipeline/attach_time.py`. `candidate_shooting_ids` n'est renseigné que\npour `ambiguous_window` — les autres motifs n'ont pas de détail additionnel."
+      },
       "AutoAttachRate": {
         "properties": {
           "total": {
@@ -6738,7 +6771,19 @@
           "quarantine_reason": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "truncated_file",
+                  "not_an_image",
+                  "unsupported_mime",
+                  "dimensions_out_of_range",
+                  "aspect_ratio_out_of_range",
+                  "exif_inconsistent",
+                  "too_large",
+                  "quota_exceeded",
+                  "ingest_failed",
+                  "orphan_object"
+                ]
               },
               {
                 "type": "null"
@@ -6749,14 +6794,12 @@
           "quarantine_detail": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/QuarantineDetail"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Quarantine Detail"
+            ]
           },
           "attachment_status": {
             "type": "string",
@@ -6788,14 +6831,12 @@
           "attachment_detail": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/AttachmentDetail"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Attachment Detail"
+            ]
           },
           "shooting_id": {
             "anyOf": [
@@ -7957,6 +7998,200 @@
           "collection"
         ],
         "title": "PublicSessionResponse"
+      },
+      "QuarantineDetail": {
+        "properties": {
+          "byte_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byte Size"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "found_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Found At"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "incoming_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incoming Bytes"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "max_upload_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Upload Bytes"
+          },
+          "quota_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quota Bytes"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "shot_at_exif": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shot At Exif"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "storage_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Key"
+          },
+          "used_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Bytes"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "type": "object",
+        "title": "QuarantineDetail",
+        "description": "Détail d'une quarantaine (`quarantine_detail`) — clés closes\n(`apex.models.media.QUARANTINE_DETAIL_KEYS`), toutes optionnelles puisque chaque motif de\nquarantaine n'en écrit qu'un sous-ensemble. `model_config.extra=\"ignore\"` : un champ de\ndiagnostic ajouté côté backend sans mise à jour immédiate de ce schéma ne doit jamais faire\néchouer la sérialisation de la fiche média (fail-soft) — c'est le test de cohérence\n(`tests/test_openapi_contract.py`) qui détecte l'oubli, pas une 500 en production."
       },
       "QueueStats": {
         "properties": {

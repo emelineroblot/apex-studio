@@ -7,7 +7,17 @@ import { Card } from "@/components/ui/Card";
 
 /** Motif **toujours** traduit en français — jamais le code technique brut (invariant `AGENTS.md`). */
 export function QuarantineCard({ media, thumbUrl }: { media: MediaOut; thumbUrl: string }) {
-  const detail = media.quarantine_detail as Record<string, unknown> | null;
+  // `media.quarantine_detail` est désormais le modèle généré `QuarantineDetail` (§ `lib/api/
+  // types.ts`), pas un dict libre : plus de cast. Pydantic (`QuarantineDetail.model_validate`,
+  // `routers/media.py::_quarantine_detail`) remplit les 17 clés du schéma, la plupart à `null`
+  // pour un motif donné (une seule poignée de clés est réellement pertinente par motif) — sans
+  // filtrage, la carte afficherait une dizaine de lignes « null » en plus des valeurs utiles.
+  // On ne garde donc que les entrées effectivement renseignées, comme le faisait déjà
+  // implicitement l'ancien dict JSONB partiel (qui n'avait jamais ces clés en premier lieu).
+  const detail = media.quarantine_detail;
+  const detailEntries = detail
+    ? Object.entries(detail).filter(([, value]) => value !== null && value !== undefined)
+    : [];
 
   return (
     <Card className="flex gap-4">
@@ -27,9 +37,9 @@ export function QuarantineCard({ media, thumbUrl }: { media: MediaOut; thumbUrl:
           <span className="shrink-0 text-xs text-ink-400">{formatBytes(media.byte_size)}</span>
         </div>
 
-        {detail ? (
+        {detailEntries.length > 0 ? (
           <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-ink-600 sm:grid-cols-3">
-            {Object.entries(detail).map(([key, value]) => (
+            {detailEntries.map(([key, value]) => (
               <div key={key} className="flex justify-between gap-2 sm:justify-start">
                 <dt className="text-ink-400">{DETAIL_LABELS[key as QuarantineDetailKey] ?? key}</dt>
                 <dd className="font-medium">{formatDetailValue(key, value)}</dd>
@@ -60,12 +70,14 @@ export function QuarantineCard({ media, thumbUrl }: { media: MediaOut; thumbUrl:
  * `found_at` — motifs `ingest_failed` et `orphan_object`, jamais couverts par les deux
  * corrections précédentes) : ajoutées dans le même mouvement.
  *
- * ⚠️ Cette exhaustivité ne protège que contre l'oubli d'une clé déjà listée dans
- * `QuarantineDetailKey` — si le backend en introduit une nouvelle sans que quelqu'un mette
- * à jour ce mirroir manuel (le contrat OpenAPI ne l'exposera jamais, `quarantine_detail` y
- * est JSON libre, voir `types.ts`), rien ne le détecte à la compilation. Un test source
- * (`QuarantineCard.detail-labels.test.ts`) et la revue restent la seule protection pour ce
- * cas-là.
+ * `quarantine_detail` est désormais un vrai schéma fermé du contrat OpenAPI
+ * (`QuarantineDetail`, § `lib/api/types.ts`, `QuarantineDetailKey = keyof
+ * QuarantineDetail`) : une clé retirée du contrat sans être retirée d'ici est une erreur
+ * de type, **et** une clé ajoutée au contrat sans être reportée ici en est une aussi (via
+ * le `satisfies Record<QuarantineDetailKey, true>` de `QUARANTINE_DETAIL_KEYS`) — les deux
+ * sens de la régression trouvée trois fois en intégration live J1 sont donc désormais
+ * fermés par le compilateur, pas seulement le premier. `QuarantineCard.detail-labels.test.ts`
+ * reste une défense seconde utile si `DETAIL_LABELS` perdait un jour son typage `Record<...>`.
  */
 const DETAIL_LABELS: Record<QuarantineDetailKey, string> = {
   width: "Largeur mesurée",

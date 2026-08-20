@@ -44,6 +44,10 @@ MEDIA_ENGAGEMENT_SOURCES = ("ocr", "human")
 
 # Énumération fermée des motifs de quarantaine (§3-F.2) — chaque valeur a un libellé
 # français côté frontend. `orphan_object` est ajouté par `sweep_orphans` (§3-F.4.6).
+# Source de vérité unique : le `CHECK quarantine_reason_valid` ci-dessous est construit
+# depuis ce tuple, et `apex.schemas.media.QuarantineReason` (le type exposé au contrat
+# OpenAPI) doit lister exactement les mêmes valeurs — verrouillé par
+# `tests/test_openapi_contract.py::test_quarantine_reason_enum_matches_model`.
 QUARANTINE_REASONS = (
     "truncated_file",
     "not_an_image",
@@ -55,6 +59,47 @@ QUARANTINE_REASONS = (
     "quota_exceeded",
     "ingest_failed",
     "orphan_object",
+)
+
+# Énumération fermée des motifs de non-rattachement (§3-F.3, `attachment_detail.reason`
+# quand `attachment_status='unattached'`) — écrits uniquement par
+# `apex/pipeline/attach_time.py`. Pas de `CHECK` en base pour ce champ (il vit dans le
+# JSONB `attachment_detail`, avec en plus `candidate_shooting_ids` pour `ambiguous_window`),
+# mais ce tuple reste la source de vérité pour le type exposé au contrat OpenAPI
+# (`apex.schemas.media.AttachmentUnattachedReason`), verrouillé par le même test.
+UNATTACHED_REASONS = (
+    "no_exif_timestamp",
+    "no_matching_window",
+    "ambiguous_window",
+)
+
+# Ensemble fermé des **clés** que `quarantine_detail` peut contenir (§3-F.2) — chaque motif
+# de quarantaine n'en écrit qu'un sous-ensemble (ex. `too_large` → `byte_size` +
+# `max_upload_bytes` ; `orphan_object` → `storage_key` + `found_at`), donc la *forme* du
+# JSON diffère par motif, mais le *vocabulaire* de clés est clos et vient exclusivement de
+# `apex/pipeline/integrity.py`, `apex/pipeline/ingest.py`, `apex/queue/handlers/ingest_media.py`,
+# `apex/queue/handlers/sweep_orphans.py` et `apex/routers/batches.py`. Modélisé côté contrat
+# comme un objet à propriétés optionnelles (`apex.schemas.media.QuarantineDetail`) plutôt
+# qu'un dict libre — sans jamais prétendre qu'un motif donné les émet toutes ensemble.
+# Cohérence verrouillée par `tests/test_openapi_contract.py`.
+QUARANTINE_DETAIL_KEYS = (
+    "byte_size",
+    "error",
+    "expected",
+    "format",
+    "found_at",
+    "height",
+    "incoming_bytes",
+    "last_error",
+    "max_upload_bytes",
+    "quota_bytes",
+    "ratio",
+    "reason",
+    "shot_at_exif",
+    "step",
+    "storage_key",
+    "used_bytes",
+    "width",
 )
 
 

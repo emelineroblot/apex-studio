@@ -17,12 +17,14 @@ from apex.models.shooting import Engagement
 from apex.routers._common import not_implemented
 from apex.schemas.common import Page
 from apex.schemas.media import (
+    AttachmentDetail,
     MediaAttachRequest,
     MediaEngagementAttachRequest,
     MediaEngagementOut,
     MediaExif,
     MediaOut,
     MediaSummary,
+    QuarantineDetail,
 )
 from apex.schemas.review import MediaOcrResponse
 from apex.security import CurrentUser
@@ -38,6 +40,18 @@ VARIANT_STORAGE_ATTR = {
     "preview": "storage_key_preview",
     "hd": "storage_key_hd",
 }
+
+
+def _attachment_detail(media: Media) -> AttachmentDetail | None:
+    if media.attachment_detail is None:
+        return None
+    return AttachmentDetail.model_validate(media.attachment_detail)
+
+
+def _quarantine_detail(media: Media) -> QuarantineDetail | None:
+    if media.quarantine_detail is None:
+        return None
+    return QuarantineDetail.model_validate(media.quarantine_detail)
 
 
 def _thumb_url(media_id: int) -> str:
@@ -192,10 +206,10 @@ def _media_out(db: Session, media: Media) -> MediaOut:
         duplicate_of_media_id=media.duplicate_of_media_id,
         ingest_status=media.ingest_status,
         quarantine_reason=media.quarantine_reason,
-        quarantine_detail=media.quarantine_detail,
+        quarantine_detail=_quarantine_detail(media),
         attachment_status=media.attachment_status,
         attachment_source=media.attachment_source,
-        attachment_detail=media.attachment_detail,
+        attachment_detail=_attachment_detail(media),
         shooting_id=media.shooting_id,
         is_simulated=media.is_simulated,
         caption=media.caption,

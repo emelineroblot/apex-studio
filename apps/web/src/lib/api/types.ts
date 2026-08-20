@@ -67,82 +67,90 @@ export type CameraPatchResponse = Schemas["CameraPatchResponse"];
 export type Page<T> = { items: T[]; next_cursor: string | null; total: number | null };
 
 /**
- * Motifs de quarantaine fermés (§ modèle `media.py`, `QUARANTINE_REASONS`).
- *
- * ⚠️ **Mirroir manuel, pas dérivé de `schema.d.ts`** : le backend garde ce tuple fermé
- * uniquement en Python (contrainte CHECK SQL + tuple `QUARANTINE_REASONS`) — le schéma
- * Pydantic `MediaOut.quarantine_reason`/`MediaSummary` l'expose en `str | null` **sans**
- * `Literal[...]`, donc `openapi.json` ne porte aucun `enum` pour ce champ et
- * `openapi-typescript` ne peut pas nous générer ce type. Trou de contrat signalé côté
- * backend (§ `implementation.md`, « Garde-fou libellés ») — non contournable ici sans
- * modifier `services/api/src/apex/schemas/media.py` (backend figé sur cette branche).
- * Tant que ce n'est pas corrigé côté backend, ce tuple doit être tenu à jour à la main en
- * même temps que `apex/models/media.py::QUARANTINE_REASONS`.
+ * Motifs de quarantaine fermés — désormais un **vrai enum du contrat OpenAPI**
+ * (`MediaOut.quarantine_reason`), dérivé côté backend du tuple `QUARANTINE_REASONS` de
+ * `apex/models/media.py` (verrouillé dans les deux sens par
+ * `services/api/tests/test_openapi_contract.py`). Le trou de contrat précédemment signalé
+ * ici (mirroir manuel, § `implementation.md` « Garde-fou libellés ») est comblé : ce type
+ * est un simple alias vers `schema.d.ts` (généré, `npm run gen:api`), plus une union
+ * recopiée à la main — un onzième motif ajouté côté backend et absent d'une régénération
+ * fait échouer `Record<QuarantineReason, string>` (`lib/labels.ts`) à la compilation.
  */
-export const QUARANTINE_REASONS = [
-  "truncated_file",
-  "not_an_image",
-  "unsupported_mime",
-  "dimensions_out_of_range",
-  "aspect_ratio_out_of_range",
-  "exif_inconsistent",
-  "too_large",
-  "quota_exceeded",
-  "ingest_failed",
-  "orphan_object",
-] as const;
-export type QuarantineReason = (typeof QUARANTINE_REASONS)[number];
+export type QuarantineReason = NonNullable<Schemas["MediaOut"]["quarantine_reason"]>;
 
 /**
- * Motifs du bac « à rattacher » — `attachment_detail.reason` (§ `pipeline/attach_time.py`).
- *
- * Même trou de contrat que `QUARANTINE_REASONS` ci-dessus, en pire : `attachment_detail`
- * est typé `{ [key: string]: unknown } | null` dans `openapi.json` (JSON totalement
- * libre, pas même un `string` simple pour `reason`) — aucun enum à générer. Mirroir manuel
- * du tuple fermé réellement écrit par `attach_media_by_time`.
+ * Liste d'exécution des dix motifs, dérivée du type ci-dessus (un type `Literal`/union
+ * n'a pas d'existence à l'exécution, `Object.keys` n'y a pas accès directement) via un
+ * objet `satisfies Record<QuarantineReason, true>` : toute divergence — motif retiré du
+ * contrat ou motif ajouté et non reporté ici — échoue à la compilation (`tsc`/`npm run
+ * typecheck`), jamais silencieusement à l'exécution.
  */
-export const UNATTACHED_REASONS = ["no_exif_timestamp", "no_matching_window", "ambiguous_window"] as const;
-export type UnattachedReason = (typeof UNATTACHED_REASONS)[number];
+const QUARANTINE_REASONS_EXHAUSTIVE = {
+  truncated_file: true,
+  not_an_image: true,
+  unsupported_mime: true,
+  dimensions_out_of_range: true,
+  aspect_ratio_out_of_range: true,
+  exif_inconsistent: true,
+  too_large: true,
+  quota_exceeded: true,
+  ingest_failed: true,
+  orphan_object: true,
+} satisfies Record<QuarantineReason, true>;
+export const QUARANTINE_REASONS = Object.keys(QUARANTINE_REASONS_EXHAUSTIVE) as QuarantineReason[];
 
 /**
- * Clés effectivement écrites par le backend dans `Media.quarantine_detail`, relevées à la
- * source sur cette branche (`quarantine_detail` est `{ [key: string]: unknown } | null`
- * dans le contrat OpenAPI — JSON libre, aucun enum possible à générer, même trou que
- * ci-dessus) :
- * - `pipeline/integrity.py::check_integrity` → `byte_size`, `format`, `width`, `height`,
- *   `expected`, `ratio`, `error`
- * - `routers/batches.py::upload_file` (413 `too_large`/`quota_exceeded`) → `byte_size`,
- *   `max_upload_bytes`, `used_bytes`, `incoming_bytes`, `quota_bytes`
- * - `pipeline/ingest.py` (motif `exif_inconsistent`) → `shot_at_exif`
- * - `pipeline/ingest.py` (motif `ingest_failed`, échec d'étape rattrapé) → `step`, `error`
- * - `queue/handlers/ingest_media.py::_on_dead` (motif `ingest_failed`, job mort) →
- *   `reason`, `last_error`
- * - `queue/handlers/sweep_orphans.py` (motif `orphan_object`) → `storage_key`, `found_at`
- *
+ * `AttachmentDetail` — modèle structuré du contrat (`reason` + `candidate_shooting_ids`
+ * optionnel, renseigné seulement pour `ambiguous_window`), plus un objet JSON libre.
+ * Remplace l'ancien `attachment_detail: dict[str, Any]` côté backend.
+ */
+export type AttachmentDetail = Schemas["AttachmentDetail"];
+
+/** Motifs du bac « à rattacher » — `AttachmentDetail["reason"]`, vrai enum à 3 valeurs. */
+export type UnattachedReason = AttachmentDetail["reason"];
+
+const UNATTACHED_REASONS_EXHAUSTIVE = {
+  no_exif_timestamp: true,
+  no_matching_window: true,
+  ambiguous_window: true,
+} satisfies Record<UnattachedReason, true>;
+export const UNATTACHED_REASONS = Object.keys(UNATTACHED_REASONS_EXHAUSTIVE) as UnattachedReason[];
+
+/**
+ * `QuarantineDetail` — schéma fermé du contrat, 17 clés toutes optionnelles (le détail
+ * reste de forme variable selon le motif — `too_large` n'a pas les clés d'`orphan_object`
+ * — mais son vocabulaire de clés, lui, est fermé ; `extra="ignore"` côté backend : une
+ * 18ᵉ clé de diagnostic ajoutée sans mise à jour du contrat n'est simplement pas exposée,
+ * jamais une erreur 500). Remplace l'ancien `quarantine_detail: dict[str, Any]`.
+ */
+export type QuarantineDetail = Schemas["QuarantineDetail"];
+export type QuarantineDetailKey = keyof QuarantineDetail;
+
+/**
  * `QuarantineCard.DETAIL_LABELS` est typé `Record<QuarantineDetailKey, string>` : une clé
- * listée ici sans libellé français est désormais une **erreur de type**, pas un code
- * technique brut affiché à l'écran (c'est la classe de régression trouvée trois fois en
- * intégration live J1, § `implementation.md`). Si le backend écrit une clé absente d'ici,
- * en revanche, rien ne le détecte à la compilation — seul un test source (§
- * `QuarantineCard.detail-labels.test.ts`) ou une revue peut l'attraper.
+ * retirée d'ici (donc du contrat) sans être retirée de `DETAIL_LABELS` est une erreur de
+ * type ; une clé du contrat absente d'ici (donc absente de `DETAIL_LABELS`) l'est aussi,
+ * via le `satisfies` ci-dessous — c'est la classe de régression trouvée trois fois en
+ * intégration live J1 (§ `implementation.md`), maintenant fermée par le compilateur dans
+ * les deux sens plutôt qu'un seul.
  */
-export const QUARANTINE_DETAIL_KEYS = [
-  "byte_size",
-  "format",
-  "width",
-  "height",
-  "expected",
-  "ratio",
-  "error",
-  "max_upload_bytes",
-  "used_bytes",
-  "incoming_bytes",
-  "quota_bytes",
-  "shot_at_exif",
-  "step",
-  "reason",
-  "last_error",
-  "storage_key",
-  "found_at",
-] as const;
-export type QuarantineDetailKey = (typeof QUARANTINE_DETAIL_KEYS)[number];
+const QUARANTINE_DETAIL_KEYS_EXHAUSTIVE = {
+  byte_size: true,
+  error: true,
+  expected: true,
+  format: true,
+  found_at: true,
+  height: true,
+  incoming_bytes: true,
+  last_error: true,
+  max_upload_bytes: true,
+  quota_bytes: true,
+  ratio: true,
+  reason: true,
+  shot_at_exif: true,
+  step: true,
+  storage_key: true,
+  used_bytes: true,
+  width: true,
+} satisfies Record<QuarantineDetailKey, true>;
+export const QUARANTINE_DETAIL_KEYS = Object.keys(QUARANTINE_DETAIL_KEYS_EXHAUSTIVE) as QuarantineDetailKey[];

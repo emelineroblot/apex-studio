@@ -1166,6 +1166,21 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AttachmentDetail
+         * @description Motif de non-rattachement (`attachment_detail` quand `attachment_status='unattached'`),
+         *     écrit par `apex/pipeline/attach_time.py`. `candidate_shooting_ids` n'est renseigné que
+         *     pour `ambiguous_window` — les autres motifs n'ont pas de détail additionnel.
+         */
+        AttachmentDetail: {
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "no_exif_timestamp" | "no_matching_window" | "ambiguous_window";
+            /** Candidate Shooting Ids */
+            candidate_shooting_ids?: number[] | null;
+        };
         /** AutoAttachRate */
         AutoAttachRate: {
             /** Total */
@@ -1865,11 +1880,8 @@ export interface components {
              */
             ingest_status: "uploaded" | "processing" | "ingested" | "quarantined";
             /** Quarantine Reason */
-            quarantine_reason: string | null;
-            /** Quarantine Detail */
-            quarantine_detail: {
-                [key: string]: unknown;
-            } | null;
+            quarantine_reason: ("truncated_file" | "not_an_image" | "unsupported_mime" | "dimensions_out_of_range" | "aspect_ratio_out_of_range" | "exif_inconsistent" | "too_large" | "quota_exceeded" | "ingest_failed" | "orphan_object") | null;
+            quarantine_detail: components["schemas"]["QuarantineDetail"] | null;
             /**
              * Attachment Status
              * @enum {string}
@@ -1877,10 +1889,7 @@ export interface components {
             attachment_status: "unattached" | "shooting_attached" | "engagement_attached" | "pending_review" | "inconsistent";
             /** Attachment Source */
             attachment_source: ("pipeline_time" | "pipeline_ocr" | "human") | null;
-            /** Attachment Detail */
-            attachment_detail: {
-                [key: string]: unknown;
-            } | null;
+            attachment_detail: components["schemas"]["AttachmentDetail"] | null;
             /** Shooting Id */
             shooting_id: number | null;
             /** Is Simulated */
@@ -2227,6 +2236,51 @@ export interface components {
             /** Expires In */
             expires_in: number;
             collection: components["schemas"]["PublicCollectionRef"];
+        };
+        /**
+         * QuarantineDetail
+         * @description Détail d'une quarantaine (`quarantine_detail`) — clés closes
+         *     (`apex.models.media.QUARANTINE_DETAIL_KEYS`), toutes optionnelles puisque chaque motif de
+         *     quarantaine n'en écrit qu'un sous-ensemble. `model_config.extra="ignore"` : un champ de
+         *     diagnostic ajouté côté backend sans mise à jour immédiate de ce schéma ne doit jamais faire
+         *     échouer la sérialisation de la fiche média (fail-soft) — c'est le test de cohérence
+         *     (`tests/test_openapi_contract.py`) qui détecte l'oubli, pas une 500 en production.
+         */
+        QuarantineDetail: {
+            /** Byte Size */
+            byte_size?: number | null;
+            /** Error */
+            error?: string | null;
+            /** Expected */
+            expected?: string | null;
+            /** Format */
+            format?: string | null;
+            /** Found At */
+            found_at?: string | null;
+            /** Height */
+            height?: number | null;
+            /** Incoming Bytes */
+            incoming_bytes?: number | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Max Upload Bytes */
+            max_upload_bytes?: number | null;
+            /** Quota Bytes */
+            quota_bytes?: number | null;
+            /** Ratio */
+            ratio?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Shot At Exif */
+            shot_at_exif?: string | null;
+            /** Step */
+            step?: string | null;
+            /** Storage Key */
+            storage_key?: string | null;
+            /** Used Bytes */
+            used_bytes?: number | null;
+            /** Width */
+            width?: number | null;
         };
         /** QueueStats */
         QueueStats: {

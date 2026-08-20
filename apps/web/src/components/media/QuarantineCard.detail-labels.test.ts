@@ -28,11 +28,11 @@ import { QUARANTINE_DETAIL_KEYS } from "@/lib/api/types";
 
 const COMPONENT_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "QuarantineCard.tsx");
 
-// Source de vérité unique pour les clés réellement émises par le backend :
-// `QUARANTINE_DETAIL_KEYS` (`lib/api/types.ts`), elle-même relevée à la source Python sur
-// cette branche (`pipeline/integrity.py`, `routers/batches.py`, `pipeline/ingest.py`,
-// `queue/handlers/ingest_media.py`, `queue/handlers/sweep_orphans.py` — voir le
-// commentaire de `QUARANTINE_DETAIL_KEYS` pour le détail par fichier).
+// Source de vérité unique pour les clés du contrat : `QUARANTINE_DETAIL_KEYS`
+// (`lib/api/types.ts`), dérivée du schéma `QuarantineDetail` généré depuis
+// `services/api/openapi.json` (`npm run gen:api`), lui-même issu de
+// `apex.models.media.QUARANTINE_DETAIL_KEYS` côté backend (verrouillé dans les deux sens
+// par `services/api/tests/test_openapi_contract.py`).
 const BACKEND_QUARANTINE_DETAIL_KEYS = QUARANTINE_DETAIL_KEYS;
 
 function extractDetailLabelKeys(): string[] {
