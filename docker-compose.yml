@@ -1,0 +1,46 @@
+# Base de développement locale — jetable.
+# La production tourne sur Postgres managé (Neon, Francfort) ; ce conteneur ne sert
+# qu'au développement et aux tests. Aucune donnée à préserver : `docker compose down -v`
+# et un `seed --reset` reconstruisent tout.
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: apex-db
+    environment:
+      POSTGRES_USER: apex
+      POSTGRES_PASSWORD: apex
+      POSTGRES_DB: apex
+    ports:
+      # 55432 côté hôte : évite le conflit avec un PostgreSQL déjà installé sur 5432.
+      - "55432:5432"
+    volumes:
+      # Depuis l'image postgres:18, les données vivent dans /var/lib/postgresql
+      # et non plus /var/lib/postgresql/data — monter l'ancien chemin fait échouer
+      # le conteneur au démarrage.
+      - apex-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apex -d apex"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Base dédiée aux tests : recréée à volonté, jamais de volume persistant.
+  db-test:
+    image: postgres:18-alpine
+    container_name: apex-db-test
+    environment:
+      POSTGRES_USER: apex
+      POSTGRES_PASSWORD: apex
+      POSTGRES_DB: apex_test
+    ports:
+      - "55433:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apex -d apex_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  apex-pgdata:
