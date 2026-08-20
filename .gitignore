@@ -44,11 +44,16 @@ yarn-error.log*
 .vercel
 
 # --- Médias & données locales (jamais dans le dépôt) ---
-media/
-uploads/
-storage/
+# ⚠ Motifs ANCRÉS (préfixe `/`) volontairement. Un motif nu comme `media/` matche
+# n'importe quel dossier de ce nom, à n'importe quelle profondeur : il avait
+# silencieusement exclu du dépôt `apps/web/src/components/media/` et
+# `apps/web/src/app/(app)/media/`. Un clone frais ne compilait pas.
+/storage/
+/services/api/storage/
+/media/
+/uploads/
+/demo-photos/
 *.sqlite3
-demo-photos/
 
 # --- OS & éditeurs ---
 .DS_Store
