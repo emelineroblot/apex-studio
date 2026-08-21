@@ -6,6 +6,9 @@ puis les livrer au client — dont la sélection alimente la facture.
 
 > Pièce de portfolio. Le studio, les clients et les données sont fictifs.
 
+**Démonstration en ligne : https://apex-web-emdigital.vercel.app** — les identifiants sont
+proposés sur l'écran de connexion.
+
 ## Le problème
 
 Un week-end de course produit 3 000 à 8 000 photos. Il faut les trier par écurie, par pilote
@@ -60,8 +63,8 @@ qui rattachera automatiquement les photos du week-end.
 | Frontend | Next.js |
 | Base de données | PostgreSQL — recherche plein texte et facettes natives, pas de moteur externe |
 | Traitement asynchrone | Worker Python, file de tâches en table PostgreSQL (`SKIP LOCKED`) |
-| Stockage fichiers | Stockage objet compatible S3, hébergement UE |
-| Déploiement | Vercel, environnement de démonstration jetable |
+| Stockage fichiers | Supabase Storage (endpoint S3-compatible), région UE |
+| Déploiement | Deux projets Vercel + un projet Supabase, environnement jetable |
 
 Aucune intégration tierce : la démo ne peut pas tomber pour une raison qui ne la concerne pas.
 

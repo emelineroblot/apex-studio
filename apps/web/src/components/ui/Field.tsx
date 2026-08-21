@@ -38,8 +38,25 @@ export function Field({ label, hint, error, required, children }: FieldProps) {
 }
 
 const inputBase =
-  "w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-ink-400 focus-visible:outline-2 focus-visible:outline-accent-600 focus-visible:outline-offset-1 disabled:bg-ink-50 disabled:text-ink-400";
+  "w-full rounded-lg border px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-1";
 
-export function inputClassName(className?: string): string {
-  return clsx(inputBase, className);
+/**
+ * Les couleurs vivent dans une variante, **jamais dans une classe ajoutée par-dessus**.
+ *
+ * Empiler `bg-ink-800` sur une base qui porte déjà `bg-white` ne produit pas la couleur
+ * qu'on croit : entre deux utilitaires Tailwind de même propriété, ce n'est pas l'ordre
+ * dans l'attribut `class` qui tranche, mais celui du CSS généré. Sur l'écran de connexion,
+ * `bg-white` et `text-white` gagnaient tous les deux — champs blancs, texte blanc, saisie
+ * invisible. Le formulaire fonctionnait parfaitement, on ne voyait simplement rien.
+ */
+const TONE_CLASSES = {
+  light:
+    "border-ink-200 bg-white text-ink-900 placeholder:text-ink-400 focus-visible:outline-accent-600 disabled:bg-ink-50 disabled:text-ink-400",
+  dark: "border-ink-700 bg-ink-800 text-white placeholder:text-ink-500 focus-visible:outline-accent-500 disabled:bg-ink-900 disabled:text-ink-500",
+} as const;
+
+export type InputTone = keyof typeof TONE_CLASSES;
+
+export function inputClassName(className?: string, tone: InputTone = "light"): string {
+  return clsx(inputBase, TONE_CLASSES[tone], className);
 }

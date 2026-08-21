@@ -10,7 +10,9 @@ trouve que le generateur de demo ne posait aucun `storage_key_hd`, donc qu'aucun
 collection du jeu n'etait livrable. Aucun test unitaire ne pouvait voir ce trou.
 
 Usage :
-    python scripts/verify_j3_flow.py
+    python scripts/verify_j3_flow.py                      # API locale
+    python scripts/verify_j3_flow.py https://mon-api      # environnement distant
+                                                          # (APEX_WORKER_SECRET requis)
 
 Studio : se connecter, composer une collection, la publier, creer un lien de partage.
 Client : ouvrir le lien, voir ses photos, en choisir, commenter, valider.
@@ -20,12 +22,22 @@ Client : telecharger l'archive et verifier qu'elle est un vrai ZIP.
 
 import io
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 import zipfile
 
-BASE = "http://localhost:8001/api/v1"
+#: Cible : `python scripts/verify_j3_flow.py [url-de-base]`, ou la variable APEX_BASE_URL.
+#: Sans argument, l'API locale — le cas courant en developpement.
+BASE = (
+    sys.argv[1] if len(sys.argv) > 1 else os.environ.get("APEX_BASE_URL", "http://localhost:8001")
+).rstrip("/").removesuffix("/api/v1") + "/api/v1"
+
+#: Secret partage de `POST /jobs/tick`. Contrairement aux comptes de demonstration, l'API
+#: ne le publie pas : il faut le fournir pour verifier un environnement distant.
+WORKER_SECRET = os.environ.get("APEX_WORKER_SECRET", "dev-worker-secret")
+
 OK = []
 KO = []
 
@@ -58,12 +70,25 @@ def check(label, condition, detail=""):
     print(f"  {mark} {label}{(' — ' + str(detail)) if detail and not condition else ''}")
 
 
-print("== Studio ==")
-status, body = call(
-    "POST",
-    "/auth/login",
-    body={"email": "dirigeant@studio-chicane.dev", "password": "changeme-owner"},
-)
+def demo_credentials(role: str) -> tuple[str, str]:
+    """Lit les identifiants sur `GET /demo/accounts`, jamais en dur.
+
+    Ils viennent des variables d'environnement et different donc d'un environnement a
+    l'autre. Cette route publique est deja la source que consulte l'ecran de connexion de
+    la demonstration : coder un mot de passe ici le rendrait faux ailleurs.
+    """
+    code, accounts = call("GET", "/demo/accounts")
+    if code != 200:
+        raise SystemExit(f"impossible de lire les comptes de demonstration ({code})")
+    for account in accounts:
+        if account["role"] == role:
+            return account["email"], account["password"]
+    raise SystemExit(f"aucun compte de role {role}")
+
+
+print(f"== Studio == ({BASE})")
+email, password = demo_credentials("owner")
+status, body = call("POST", "/auth/login", body={"email": email, "password": password})
 check("connexion dirigeant", status == 200, body)
 owner = body["access_token"]
 
@@ -83,7 +108,7 @@ status, collection = call(
     "POST",
     "/collections",
     token=owner,
-    body={"client_id": client_id, "title": "Parcours J3 — verification"},
+    body={"client_id": client_id, "title": "Verification de livraison"},
 )
 check("creation de collection", status == 201, collection)
 collection_id = collection["id"]
@@ -154,8 +179,11 @@ status, locked = call("PUT", f"/public/selection/items/{media_ids[4]}", token=cl
 check("la selection validee est figee", status == 409, status)
 
 print("== Worker ==")
-status, tick = call("POST", "/jobs/tick", extra_headers={"X-Worker-Secret": "dev-worker-secret"})
+status, tick = call("POST", "/jobs/tick", extra_headers={"X-Worker-Secret": WORKER_SECRET})
 check("drainage de la file", status == 200, tick)
+if status != 200:
+    # Tout ce qui suit depend du drainage : dix echecs en cascade masqueraient la cause.
+    raise SystemExit("Drainage impossible — renseigner APEX_WORKER_SECRET pour cette cible.")
 print(
     f"       claimed={tick.get('claimed')} done={tick.get('done')} "
     f"failed={tick.get('failed')} deferred={tick.get('deferred')}"
@@ -177,7 +205,9 @@ if status == 200:
 
 print("== Facturation ==")
 status, invoices = call("GET", "/invoices", token=owner)
-check("facture brouillon creee", status == 200 and invoices["items"], invoices)
+check("facture brouillon creee", status == 200 and bool(invoices.get("items")), invoices)
+if not invoices.get("items"):
+    raise SystemExit("Aucune facture : la suite du parcours ne peut pas etre verifiee.")
 invoice = invoices["items"][0]
 check(
     "la facture porte les photos choisies",

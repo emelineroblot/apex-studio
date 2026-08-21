@@ -257,7 +257,11 @@ s'attendre à une exception PL/pgSQL, pas à un refus applicatif.
 ## Base de données, migrations et stratégie de test
 *Décidé le 2026-08-20 — run `J1 socle et ingestion`*
 
-**Décision.** Neon (Francfort) pour la base managée. **Une seule révision Alembic par jalon**
+> **Révisé le 2026-08-21.** La base managée est **Supabase**, pas Neon — voir « Bascule vers
+> Supabase » plus bas. Le reste de cette décision (une révision Alembic par jalon, base
+> jetable) tient inchangé.
+
+**Décision d'origine.** Neon (Francfort) pour la base managée. **Une seule révision Alembic par jalon**
 (`0001_schema_initial` couvre les 28 tables des trois jalons) : tant qu'une révision n'est pas
 mergée dans `main`, on l'édite en place au lieu d'en empiler une nouvelle. Les tests tournent
 contre une vraie base PostgreSQL dédiée (`apex_test`), réinitialisée par `DROP SCHEMA` en
@@ -632,6 +636,41 @@ la main quand la mesure part du `requirements.txt` réellement exporté. Le poid
 dominé par `numpy` (43 Mo + 28 Mo de `numpy.libs`, requis par le hash perceptuel), `botocore`
 (30 Mo) et `faker` (25 Mo, jeu de démo) — trois pistes de réduction si la marge devait un jour
 se resserrer, aucune nécessaire aujourd'hui.
+
+## Bascule vers Supabase : aligner le portfolio plutôt qu'optimiser chaque projet
+*Décidé le 2026-08-21 — run `bascule Supabase`*
+
+**Décision.** Base managée **et** stockage objet chez Supabase (région UE), à la place de
+Neon + Cloudflare R2. Deux chaînes de connexion : `DATABASE_URL` (Transaction pooler, port
+6543) pour l'API, `DATABASE_URL_DIRECT` (Session pooler, 5432) pour Alembic.
+
+**Pourquoi.** Cardan, la première application du portfolio, tourne déjà là-dessus. Aligner
+les deux projets vaut plus qu'un arbitrage optimal projet par projet : un seul fournisseur à
+administrer, une seule facture à surveiller, **un seul jeu de pièges déjà payés** — et ils
+sont réels (voir ci-dessous). Le gain technique accessoire est qu'un projet Supabase fournit
+la base *et* le stockage : une ressource externe à créer au lieu de deux.
+
+L'argument qui avait écarté Supabase — mise en pause après sept jours d'inactivité — n'a pas
+disparu, il est accepté : la démonstration se réveille avant un rendez-vous, comme celle de
+Cardan. Il interdit en revanche une idée qui paraissait raisonnable : **un cron
+hebdomadaire serait le pire des rythmes**, puisqu'il tombe exactement sur le seuil de pause.
+
+**Trois pièges hérités de Cardan, pris en compte sans avoir eu à les rencontrer.**
+1. L'onglet « Direct connection » (`db.<ref>.supabase.co`) ne publie **qu'un enregistrement
+   AAAA (IPv6)** : inutilisable depuis tout réseau sans IPv6. C'est pourtant celui que la
+   documentation Supabase met en avant.
+2. Un pooler en mode transaction ne peut pas porter une migration de schéma — d'où la
+   seconde URL, réservée à Alembic.
+3. Les instructions préparées ne survivent pas au multiplexage : `prepare_threshold=None`
+   dès que `APP_ENV != local`. Sans cela, psycopg réutilise une instruction posée sur une
+   autre session backend et la requête échoue, de façon intermittente et incompréhensible.
+
+**Conséquences.** `pool_recycle=280` s : Supavisor ferme les connexions inactives autour de
+cinq minutes, et tirer une connexion morte du pool coûte un aller-retour perdu au réveil.
+Le backend S3 (`boto3`) parle à l'endpoint S3-compatible de Supabase sans code spécifique —
+**non vérifié faute de compte**, premier point à contrôler après le déploiement, avec R2 en
+repli sans changement de code. Enfin `S3_REGION` est la région réelle du projet, jamais
+`auto` comme chez R2.
 
 ## Espace client : cloisonné par construction, des deux côtés
 *Décidé le 2026-08-21 — run `J3 livraison et facturation`*

@@ -19,7 +19,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Le DATABASE_URL applicatif fait foi ; la valeur de alembic.ini n'est qu'un repli.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# `migration_database_url` : la chaîne « Session pooler » quand elle est fournie
+# (`DATABASE_URL_DIRECT`), sinon `DATABASE_URL`. Un pooler en mode transaction multiplexe
+# les connexions et ne peut pas porter une migration de schéma.
+# `%` doublé : `set_main_option` écrit dans un `ConfigParser`, qui traite `%` comme une
+# interpolation (`%(clé)s`) et lève `ValueError: invalid interpolation syntax` sur toute URL
+# qui en contient. Or un mot de passe est URL-encodé dès qu'il porte un caractère spécial —
+# `$` devient `%24`, `!` devient `%21` — ce qui est le cas courant d'un mot de passe généré
+# par un hébergeur. Rencontré au premier `alembic upgrade head` contre Supabase.
+config.set_main_option("sqlalchemy.url", settings.migration_database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

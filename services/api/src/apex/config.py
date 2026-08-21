@@ -50,19 +50,30 @@ class Settings(BaseSettings):
 
     # --- Base de données ---
     database_url: str = "postgresql+psycopg://apex:apex@localhost:55432/apex"
+    # Chaîne « Session pooler » (port 5432) de Supabase, réservée à Alembic. Un pooler en
+    # mode **transaction** (`database_url`, port 6543) multiplexe les connexions et ne
+    # supporte pas une migration de schéma, qui a besoin d'une session à elle. Vide en
+    # local : `alembic/env.py` retombe alors sur `database_url`, qui est déjà une connexion
+    # directe.
+    #
+    # ⚠️ Ne jamais y mettre l'onglet « Direct connection » de Supabase
+    # (`db.<ref>.supabase.co`) : il ne publie qu'un enregistrement AAAA (IPv6) et échoue
+    # avec `failed to resolve host` depuis tout réseau sans IPv6 — constaté sur le projet
+    # Cardan, même plateforme.
+    database_url_direct: str = ""
 
     # --- Auth ---
     jwt_secret: str = "dev-secret-change-me"
     jwt_ttl_minutes: int = 480
     client_session_ttl_minutes: int = 30
 
-    # --- Stockage objet (Cloudflare R2, jurisdiction eu) ---
-    s3_endpoint_url: str = "https://example.r2.cloudflarestorage.com"
+    # --- Stockage objet (Supabase Storage, endpoint S3-compatible, région UE) ---
+    s3_endpoint_url: str = "https://example.storage.supabase.co/storage/v1/s3"
     s3_region: str = "auto"
     s3_bucket: str = "apex-dev"
     s3_access_key_id: str = "changeme"
     s3_secret_access_key: str = "changeme"
-    # `local` par défaut (§5 du plan : dev/tests sans compte Cloudflare) ; `s3` en prod.
+    # `local` par défaut (§5 du plan : dev/tests sans compte d'hébergeur) ; `s3` en ligne.
     storage_backend: str = "local"
     storage_local_dir: str = "./storage"
 
@@ -90,6 +101,22 @@ class Settings(BaseSettings):
     # --- Limites ---
     max_upload_bytes: int = 26_214_400
     default_shooting_quota_bytes: int = 2_147_483_648
+
+    @property
+    def is_remote(self) -> bool:
+        """Vrai partout sauf sur un poste de développement.
+
+        Sert à activer les contournements propres à un hébergement mutualisé (pooler en
+        mode transaction). Volontairement plus large que « production » : un déploiement de
+        prévisualisation passe par le même pooler et rencontre exactement les mêmes
+        limites.
+        """
+        return self.app_env != "local"
+
+    @property
+    def migration_database_url(self) -> str:
+        """URL à utiliser pour les migrations : la session pooler si elle est fournie."""
+        return self.database_url_direct or self.database_url
 
     @model_validator(mode="after")
     def _reject_default_secrets_outside_local(self) -> "Settings":

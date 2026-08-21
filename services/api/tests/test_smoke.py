@@ -26,3 +26,32 @@ def test_login_flow(client: TestClient, db_session) -> None:
     me = client.get("/api/v1/auth/me", headers=auth_headers(user))
     assert me.status_code == 200
     assert me.json()["email"] == user.email
+
+
+def test_health_signale_la_base_et_le_stockage(client: TestClient) -> None:
+    """Le contrôle de santé couvre les deux dépendances externes de l'application.
+
+    `storage` valait `"unknown"` en dur jusqu'au premier déploiement : un contrôle qui
+    ignore la moitié de ce dont l'application dépend n'aide pas à diagnostiquer une clé
+    d'accès invalide ou un bucket disparu — les deux pannes les plus probables en ligne.
+    """
+    body = client.get("/api/v1/health").json()
+    assert body["db"] == "ok"
+    assert body["storage"] == "ok"
+    assert body["status"] == "ok"
+
+
+def test_health_degrade_quand_le_stockage_repond_plus(client: TestClient, monkeypatch) -> None:
+    """Une panne de stockage doit se voir dans `status`, pas seulement dans le détail."""
+    import apex.main
+
+    def _boom() -> None:
+        raise RuntimeError("stockage injoignable")
+
+    monkeypatch.setattr(apex.main, "get_storage_client", _boom)
+    body = client.get("/api/v1/health").json()
+    assert body["storage"] == "down"
+    assert body["status"] == "degraded"
+    # La base, elle, reste joignable : le diagnostic doit rester lisible dépendance par
+    # dépendance, jamais réduit à un seul drapeau.
+    assert body["db"] == "ok"

@@ -3,7 +3,7 @@
 Le worker est CPU-bound (Pillow, numpy, ONNX en J2) : l'async n'apporte rien et complique
 `SKIP LOCKED`. FastAPI exécute les endpoints `def` (non-`async`) dans un threadpool.
 Pool volontairement petit (`pool_size=2, max_overflow=3`) — contrainte des connexions en
-environnement serverless (Neon).
+environnement serverless, où chaque invocation ouvre son propre moteur.
 """
 
 from collections.abc import Generator
@@ -15,11 +15,26 @@ from sqlalchemy.pool import NullPool
 
 from apex.config import settings
 
+#: Contournements imposés par le pooler Supabase (Supavisor, mode transaction — même
+#: comportement que PgBouncer). Absents en local, où l'on parle directement à PostgreSQL.
+_CONNECT_ARGS: dict[str, object] = {}
+if settings.is_remote:
+    # Les instructions préparées ne survivent pas au multiplexage des connexions : psycopg
+    # en réutiliserait une posée sur une autre session backend et la requête échouerait.
+    _CONNECT_ARGS["prepare_threshold"] = None
+
+#: Supavisor ferme les connexions inactives autour de cinq minutes. Recycler un peu avant
+#: évite de tirer une connexion déjà morte du pool — `pool_pre_ping` la rattraperait, au
+#: prix d'un aller-retour perdu sur la première requête d'un réveil.
+_POOL_RECYCLE_SECONDS = 280
+
 engine = create_engine(
     settings.database_url,
     pool_size=2,
     max_overflow=3,
     pool_pre_ping=True,
+    pool_recycle=_POOL_RECYCLE_SECONDS,
+    connect_args=_CONNECT_ARGS,
     future=True,
 )
 
@@ -31,10 +46,12 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 # provoque des `QueuePool limit ... timeout` (reproduit par
 # `tests/queue/test_concurrency.py`, 8 workers). `NullPool` : chaque heartbeat ouvre puis
 # referme sa propre connexion physique, sans jamais disputer le pool applicatif — le budget
-# de connexions Neon (dette documentée, `AGENTS.md`/plan §3-C) reste à surveiller au premier
+# de connexions du pooler Supabase (dette documentée, `AGENTS.md`) reste à surveiller au premier
 # déploiement, mais un heartbeat est bref (un `UPDATE` d'une ligne) et peu fréquent par
 # rapport au trafic applicatif.
-heartbeat_engine = create_engine(settings.database_url, poolclass=NullPool, future=True)
+heartbeat_engine = create_engine(
+    settings.database_url, poolclass=NullPool, connect_args=_CONNECT_ARGS, future=True
+)
 
 
 def get_db() -> Generator[Session]:

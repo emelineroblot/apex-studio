@@ -42,6 +42,7 @@ from apex.routers import (
     users,
 )
 from apex.routers import settings as settings_router
+from apex.services.storage import get_storage_client
 
 API_PREFIX = "/api/v1"
 
@@ -140,15 +141,34 @@ def _bootstrap_demo_users() -> None:
 
 @app.get("/api/v1/health", tags=["health"], summary="Vérification de disponibilité")
 def health() -> dict[str, str]:
-    """Public — pas d'authentification requise. Vérifie la base et signale le stockage."""
+    """Public — pas d'authentification requise. Vérifie la base **et** le stockage.
+
+    Le champ `storage` a longtemps valu `"unknown"` en dur : un contrôle de santé qui
+    ignore la moitié de ce dont l'application dépend ne dit pas grand-chose. Il teste
+    désormais une vraie lecture de métadonnées sur le stockage objet — assez pour
+    distinguer « clés invalides » ou « bucket disparu » d'un incident de base.
+
+    Volontairement une lecture, jamais une écriture : un contrôle de santé sollicité en
+    boucle ne doit pas laisser de traces, ni consommer de quota.
+    """
     db_status = "ok"
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception:
         db_status = "down"
+
+    storage_status = "ok"
+    try:
+        # `object_size` sur une clé qui n'existe pas : la réponse importe peu, ce qui
+        # compte est que l'appel aboutisse sans erreur d'authentification ni de réseau.
+        get_storage_client().object_size("healthcheck/probe")
+    except Exception:
+        storage_status = "down"
+
+    healthy = db_status == "ok" and storage_status == "ok"
     return {
-        "status": "ok" if db_status == "ok" else "degraded",
+        "status": "ok" if healthy else "degraded",
         "db": db_status,
-        "storage": "unknown",
+        "storage": storage_status,
     }
