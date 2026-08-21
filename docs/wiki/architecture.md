@@ -279,7 +279,7 @@ une base déjà créée — voir `pieges-projet.md`. Et puisqu'il n'y a qu'une b
 `pytest` concurrents s'interbloquent sur le `DROP SCHEMA`.
 
 ## Projection de recherche `media_search` : réindexation synchrone, pas un job systématique
-*Décidé le 2026-08-21 — run `J2 recherche et jeu de démo`*
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
 
 **Décision.** `services/search_projection.py::project_media_search(session, media_ids)` est un
 unique `INSERT … SELECT … ON CONFLICT (media_id) DO UPDATE`, appelé **directement et dans la
@@ -305,7 +305,7 @@ le drainage — inacceptable pour un critère d'acceptation qui promet une reche
 sans jamais rejoindre `media_search`.
 
 ## Recherche à facettes : neuf agrégats indexés plutôt qu'un `GROUPING SETS` fusionné
-*Décidé le 2026-08-21 — run `J2 recherche et jeu de démo`*
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
 
 **Décision.** Le compteur de chaque facette multi-sélection (§3-K.2, règle « sauf soi ») est
 calculé par sa **propre** requête, filtrée par tous les prédicats actifs sauf le sien —
@@ -327,8 +327,18 @@ facettes réellement actives, rarement plus de 2-3 à la fois) resterait l'optim
 — non faite ici faute de nécessité mesurée, à trancher sur un nouveau chiffre, pas par
 anticipation.
 
+**Le prix du « PostgreSQL pur », chiffré (ajout du 2026-08-21).** Un `GET /search` complet vaut
+**21 allers-retours SQL** (résultats, `COUNT(*)`, les 9 agrégats de facette, les histogrammes).
+C'est acceptable **parce que la mesure a été faite** : p95 ≈ 53 ms bout en bout sur le jeu de
+démo complet, budget 300 ms — mais sur Postgres conteneurisé **en local**. Sur Neon depuis
+Vercel, à 8-15 ms de RTT, ces 21 allers-retours ajoutent 170 à 315 ms de latence réseau pure,
+c'est-à-dire le budget entier. **À re-mesurer au premier déploiement**, avant toute autre
+optimisation : c'est le nombre de round-trips, pas le coût de chaque requête, qui vieillira mal.
+Le refus d'un moteur externe (Elasticsearch, Meilisearch — hors périmètre du brief) reste le bon
+choix à cette volumétrie ; il se paie ici, et nulle part ailleurs.
+
 ## Générateur de démo : `Model.__table__` (Core), jamais `Model` (ORM), pour les écritures en lot
-*Décidé le 2026-08-21 — run `J2 recherche et jeu de démo`*
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
 
 **Décision.** Toutes les écritures en lot du générateur de démo (`apex/demo/seed.py`) —
 `media`, `media_series`, `media_engagement`, `media_ocr_candidate`, et les `UPDATE` en
@@ -350,3 +360,164 @@ beaucoup d'objets — la bascule ORM → Core doit être un réflexe de performa
 une découverte à chaque fois. `update(Model.__table__)` en `executemany` exige
 `.where(Colonne == bindparam("nom"))` avec un nom de paramètre **différent** du nom de la
 colonne ciblée si on veut passer par un mode ORM ; en Core pur, le bind name est libre.
+
+## Frontière DOE de l'OCR : le modèle produit un texte et un nombre, jamais un rattachement
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
+
+**Décision.** `pipeline/ocr/engine.py` est le **seul** module qui appelle le modèle, et son
+unique question est « quels textes vois-tu, avec quelle confiance ». Il ne connaît ni les
+engagements, ni les pilotes, ni les clients. Tout ce qui *décide* est du code exact ailleurs :
+filtrage géométrique et score composite (`scoring.py`), normalisation (`normalize.py`),
+**jointure SQL sur `engagement`**, application des seuils et écriture de `media_engagement` /
+`attachment_status` (`classify.py`). Les Directives (`ocr_high`, `ocr_low`, ratios géométriques,
+`engine_version`) vivent en table `app_setting`, éditables sans redéploiement, jamais en dur.
+
+**Pourquoi.** C'est le seul point « IA » du projet et l'argument central de l'étude de cas
+(« le déterministe reste au code »). Une frontière déclarée dans un document ne vaut rien : il
+fallait la rendre **opposable**. Trois vérifications, de nature différente à dessein : un moteur
+factice de dix lignes fait tourner toute la chaîne (persistance, jointure, seuils, rattachement)
+— donc rien du métier ne dépend du vrai modèle ; un moteur qui **lève une exception dès qu'on le
+lit** est injecté pendant toute une re-projection — donc ce chemin ne touche jamais le modèle ;
+et une **analyse de l'AST** vérifie qu'aucun module de la fermeture d'imports du chemin de
+re-projection n'importe `engine.py` — un test de comportement ne couvre que ce qu'il exécute,
+celui-ci ferme la porte.
+
+**Conséquences.** Remplacer le moteur (si la calibration sur photos réelles déçoit) est un
+changement d'un fichier derrière le protocole `OcrEngine`. Corollaire pour la revue : le test
+d'AST a d'abord été écrit sur une **liste de quatre fichiers rédigée à la main** et une
+recherche de sous-chaîne — il promettait plus qu'il ne garantissait (revue J2, 🟠 6). Il a été
+réécrit autour d'une vraie fermeture transitive des imports `apex.*` résolus sur le système de
+fichiers, avec un plancher de taille (`>= 8` alors que la fermeture réelle vaut 12) posé
+volontairement **sous** la valeur mesurée pour ne pas recréer une liste figée déguisée. Toute
+extension du chemin de re-projection reste donc couverte sans maintenance.
+
+## Candidats OCR bruts persistés : changer un seuil re-projette, sans jamais ré-inférer
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
+
+**Décision.** `media_ocr_candidate` persiste la sortie brute du modèle — texte lu, score, boîte,
+`engine_version`. `PUT /settings/ocr` écrit les Directives puis enqueue `reclassify_ocr`, qui
+**re-projette les candidats existants** dans auto / validation / abstention. Aucun chemin de
+reclassement ne relit une image. Quatre issues, dont une hors bande de seuils : `not_engaged`
+(numéro absent de la table des engagements) est un signal **métier**, jamais un échec du
+modèle — baisser un seuil ne fait pas apparaître une voiture qui n'est pas au départ, et rien
+n'est jamais rattaché de force.
+
+**Pourquoi.** Le critère d'acceptation « changer les seuils redistribue les cas » n'est
+démontrable en direct que si la redistribution est instantanée. Ré-inférer coûterait ~41 min
+pour 8 000 médias (311 ms/image mesurés, aperçu 1600 px, CPU) ; re-projeter tient en quelques
+secondes, par tranches de 500. C'est ce qui transforme le curseur de seuils en argument de
+démonstration plutôt qu'en réglage de fichier de configuration.
+
+**Conséquences.** Les décisions humaines (`accepted`/`rejected`) et les rattachements manuels
+(`source='human'`) sont **terminaux** : ils survivent à tout changement de seuil, à toute
+re-projection, à tout rejeu de `ocr_media`. Corollaire découvert en revue : tout chemin qui
+défait un rattachement d'origine machine doit d'abord rendre la décision humaine terminale
+(candidats visés passés en `rejected`, `engagement_id = None`) **avant** la re-projection —
+sinon celle-ci recalcule `auto` et réinsère le lien avant le commit, et l'API répond `204` en
+n'ayant rien supprimé. Enfin, deux Directives (`min/max_box_area_ratio`) n'agissent qu'à
+l'inférence : les modifier ne redistribue rien et fait cohabiter deux millésimes de score dans
+le catalogue — dette assumée, à traiter si elles deviennent réellement éditables.
+
+## Calibration des seuils : ce que l'évaluation offline a corrigé du plan
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
+
+**Décision.** Les seuils par défaut sont `high = 0,85` / `low = 0,45`, mesurés et non choisis :
+`pytest -m ocr_eval` (hors suite par défaut) balaie les seuils sur un jeu synthétique à vérité
+terrain et retient le premier point tenant une **précision ≥ 98 % dans la bande auto**. Le
+livrable n'est pas un chiffre mais un **protocole** : rejouer l'évaluation sur le jeu réel une
+fois sourcé (`OCR_EVAL_DATASET=…`), lire les deux nombres, les saisir dans l'UI. Aucune ligne de
+code à modifier.
+
+**Pourquoi.** Trois constats de la mesure ont changé le code ou la méthode, et aucun n'était
+prévisible sur le papier :
+
+1. **Le seuil du plan (0,80) ne tenait pas la cible** — 97,7 % de précision, 5 rattachements
+   erronés. Le gate a échoué comme il devait. Passer à 0,85 coûte 2,5 points d'automatisme
+   (59,4 % → 56,9 %) et retire un faux positif sur cinq : une abstention coûte un clic, un faux
+   positif livre une photo au mauvais client.
+2. **Un facteur `f_pureté` a été ajouté à la formule du plan** (`conf × f_géométrie ×
+   f_longueur`). La regex `^[0-9]{1,3}$` ne protège de rien une fois les confusions
+   typographiques appliquées : « MICHELIN » devient « 111 », « SO » devient « 50 », avec la
+   confiance du modèle intacte — un flanc de pneu rattachait des photos au n°111. `f_pureté` est
+   la proportion de caractères déjà chiffres **avant** substitution, planchée à 0,30 : coût nul
+   sur une lecture propre, effondrement du score sur une lecture reconstruite.
+3. **La densité du plateau est le paramètre le plus sensible de toute la mesure.** Une première
+   version du jeu tirait les numéros au hasard et simulait un plateau de 168 voitures : 92,2 %
+   de précision. Avec une table des engagements réaliste (44 voitures, `ENTRY_LIST_SIZE`), la
+   même chaîne mesure 98,0 %. Corriger la simulation n'était pas une complaisance, c'était la
+   condition pour que le chiffre veuille dire quelque chose.
+
+**Conséquences.** Règle de publication : **le taux de rattachement automatique ne se cite jamais
+sans la taille du plateau** — le rapport généré (`docs/ocr-eval.md`, artefact, jamais édité à la
+main) le met en tête. Le seuil recommandé est un ordre de grandeur, pas une valeur à trois
+décimales : sur 205 rattachements, une erreur pèse 0,49 point et l'intervalle de confiance à
+95 % vaut ±1,9 point — la colonne de précision du balayage n'est d'ailleurs pas monotone. Enfin,
+la classe d'erreur résiduelle est **irréductible** et mérite de figurer dans l'étude de cas :
+les 4 erreurs restantes sont toutes un chiffre occulté (`313` lu `13`) dont la troncature tombe
+par malchance sur un autre numéro engagé — un humain lit la même chose, et le seul garde-fou
+disponible (la table des engagements) ne joue pas dans ce cas. C'est l'argument même de
+l'arbitrage humain.
+
+## Indicateurs de rattachement automatique : deux grains, un invariant, une ventilation
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
+
+**Décision.** Deux indicateurs coexistent et ne comptent **pas** la même chose, par
+construction : `GET /settings/ocr → distribution.auto` compte des **candidats**
+(`media_ocr_candidate` en résolution `auto`/`accepted`) ; `GET /stats/auto-attach-rate →
+auto_ocr` compte des **médias** portant au moins un `media_engagement` qu'aucun humain n'a
+touché. La différence est documentée dans la docstring de `routers/stats.py`. Ce qui est absolu,
+en revanche, c'est l'invariant : **une baisse du seuil haut ne fait jamais reculer aucun des
+deux.** Un test de propriété cross-endpoints le verrouille (snapshot avant/après un
+`PUT /settings/ocr` sur seed réel). Par ailleurs, `auto-attach-rate` **ventile** son calcul en
+`real` / `simulated`, et `GET /search` expose un filtre `is_simulated` à trois états.
+
+**Pourquoi.** L'invariant a été formulé parce qu'il a été enfreint : en démonstration, baisser
+le seuil faisait **reculer** `auto_ocr` de 178 pendant que `distribution.auto` et la facette
+`engagement_attached` avançaient de 236 — deux écrans qui se contredisent devant le prospect,
+sur le point précis que le brief met en avant. Cause réelle (l'hypothèse « écrasement par un
+autre chemin » était fausse) : le générateur de démo posait un `media_engagement` pour les
+médias `pending_review`, un état **impossible en production** puisque la file de validation est
+précisément l'ensemble des candidats non encore matérialisés. `auto_ocr` était donc gonflé de la
+taille de la file (414) au sortir d'un seed frais, et la première re-projection nettoyait ces
+liens fantômes. La ventilation `real`/`simulated`, elle, répond à une exigence de probité : on
+ne fait pas passer un jeu généré pour du traitement réel — un dirigeant qui lit `real.total = 0`
+ne prend pas 7 842 médias simulés pour un taux acquis.
+
+**Conséquences.** Deux métriques de grains différents sur le même phénomène exigent un **test
+d'accord**, pas deux tests séparés — chacune peut être juste isolément pendant que le couple
+ment. Le correctif porte sur l'**écriture** (le générateur ne produit plus la donnée
+impossible), jamais sur la lecture : filtrer `auto_ocr` aurait masqué le symptôme et rendu
+l'indicateur incohérent avec son propre contrat. Toute nouvelle métrique exposée au tableau de
+bord doit déclarer son grain et, si elle recoupe une autre, être couplée à elle par un invariant
+testé.
+
+## Visibilité par défaut d'une liste de médias : une source unique, paramétrée par colonnes
+*Décidé le 2026-08-21 — run `J2 intelligence et recherche`*
+
+**Décision.** Les trois règles qui déterminent « ce qu'une liste de médias montre par défaut »
+vivent dans `services/access.py` et nulle part ailleurs : `series_collapse_clause` (repli des
+rafales, **avec** sa clause de défense « média sans shooting »), `exclude_duplicates_clause`
+(doublons exclus) et `media_visibility_clause_for` (cloisonnement par rôle). Elles sont
+paramétrées **par colonnes** (`InstrumentedAttribute`), pas par modèle : `Media` et
+`MediaSearch` portent les mêmes noms de colonnes sans être la même classe SQLAlchemy. `/media`
+et `/search` les consomment ; un test d'accord compare les deux routes sur leur population
+commune.
+
+**Pourquoi.** Le motif s'est rejoué **trois fois**. (1) En clôture de J1, le repli des rafales
+masquait les orphelins de `GET /media` — corrigé par une clause `or_` inline. (2) En J2,
+`services/facets.py` avait réimplémenté la même règle sans reprendre cette clause : `/search`
+masquait l'**intégralité** du bac « à rattacher » (374 médias, `total = 0`), puisqu'un média
+sans shooting ne passe jamais par le regroupement de rafales et reste donc
+`is_series_representative = False`. (3) La revue J2 a trouvé la même duplication sur le
+cloisonnement de rôle, avec un enjeu plus fort encore. Deux implémentations d'une même règle
+divergent toujours ; le passage par colonnes explicites force chaque appelant à fournir ses
+arguments, et c'est **cette explicité** qui rend l'oubli visible à l'écriture — pas un mécanisme
+de type.
+
+**Conséquences.** Toute nouvelle route qui liste des médias passe par ces trois prédicats, sans
+exception. La forme de test qui a fermé le sujet est un **test d'accord entre consommateurs**
+(`tests/search/test_media_search_agreement.py`), pas un test par route : deux routes peuvent
+être vertes séparément tout en se contredisant. Attention à ne pas mal lire les chiffres : sur
+le jeu de démo, `/search?status=inconsistent` renvoie 22 et non 95 — les 73 manquants sont des
+membres non représentatifs d'une **vraie** rafale, légitimement repliés, comme `/media` les
+replie déjà.

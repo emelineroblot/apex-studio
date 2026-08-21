@@ -88,3 +88,13 @@ projet de la même stack vivent dans la skill globale `stack-pitfalls`, pas ici.
   `tests/demo/test_seed.py::TestDeterminism`). → Corrigé dans
   `apex/demo/seed.py::_RESET_TABLES` (ajout de `circuit`) ; à vérifier une nouvelle fois si une
   future table de référence rejoint le catalogue du jeu de démo. *(2026-08-21)*
+
+- **`require_owner` ne protège aucune route destructrice de ce projet, tant que
+  `GET /demo/accounts` est public** — l'endpoint de self-service de la démo renvoie les
+  identifiants en clair, par conception. Le cloisonnement de `POST /demo/seed?reset=true`
+  (`TRUNCATE` de 25 tables) se résumait donc à trois appels : lire les identifiants, se
+  connecter, détruire. → Toute route destructrice se protège par un **secret serveur jamais
+  publié** (`X-Worker-Secret`, même patron que `POST /jobs/tick`), pas par un rôle ; et son
+  travail sort de la requête (`202 {job_id}` + enqueue) plutôt que de drainer 60 s de façon
+  synchrone sur un pool de 2+3 connexions. **À rappeler au J3** : la réinitialisation nocturne
+  et la livraison ZIP relèvent exactement du même patron. *(2026-08-21)*
