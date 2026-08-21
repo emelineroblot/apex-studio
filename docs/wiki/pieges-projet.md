@@ -172,6 +172,33 @@ projet de la même stack vivent dans la skill globale `stack-pitfalls`, pas ici.
   un cas nominal ; et surtout : **un garde-fou doit être rejoué après le changement qu'il est
   censé garder**, il fait partie du périmètre de ce changement, pas de son décor. *(2026-08-21)*
 
+- **Un test qui fabrique ses propres données ne teste pas les données de la démonstration.**
+  Les 303 tests backend passaient, et pourtant aucune collection du jeu de démo n'était
+  livrable : le générateur ne posait pas de `storage_key_hd`, quand chaque test, lui, en
+  fabriquait un. Rejouer le parcours réel (`scripts/verify_j3_flow.py`) l'a montré en une
+  minute. À faire à chaque jalon, avant de conclure. *(2026-08-21)*
+
+- **Un chiffre affiché sous le même nom à deux endroits doit venir du même calcul.** Le
+  tableau de bord J3 recalculait « le taux de rattachement automatique » en SQL, à côté de
+  `/stats/auto-attach-rate` qui le calculait déjà — et la définition est peu intuitive (un
+  média rattaché par l'OCR mais arbitré par un humain ne compte pas comme automatique, les
+  doublons sont exclus). Deux versions auraient produit deux nombres différents sous le même
+  libellé, sans que personne sache lequel croire. Le dashboard **réutilise** désormais la
+  fonction existante, au prix d'une requête de plus. *(2026-08-21)*
+
+- **`npx tsc --noEmit | tail -2` renvoie le code de sortie de `tail`, jamais celui de
+  `tsc`.** Un `&&` derrière un tube ne garantit donc rien : un commit est parti avec un
+  typecheck rouge. Vérifier le code de sortie explicitement (`npx tsc --noEmit; echo $?`) ou
+  ne pas rediriger. Vaut pour toute commande de vérification enchaînée derrière un tube.
+  *(2026-08-21)*
+
+- **La police par défaut de Pillow ne couvre que l'ASCII.** `ImageFont.load_default()` —
+  utilisée dès que `DejaVuSans-Bold.ttf` est introuvable, ce qui est le cas sur Windows et
+  sur toute image Linux sans polices système — dessine un caractère manquant (▯) pour tout
+  accent et tout tiret cadratin. Invisible en test (aucun test ne regarde les pixels d'un
+  filigrane), visible sur la première vraie image rendue. Les textes dessinés dans une image
+  sont translittérés en ASCII. *(2026-08-21)*
+
 - **`require_owner` ne protège aucune route destructrice de ce projet, tant que
   `GET /demo/accounts` est public** — l'endpoint de self-service de la démo renvoie les
   identifiants en clair, par conception. Le cloisonnement de `POST /demo/seed?reset=true`

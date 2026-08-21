@@ -216,3 +216,35 @@ class TestFactureBrouillon:
         assert invoice.subtotal_cents == lines[0].amount_cents
         # TVA appliquée sur le sous-total, arrondie au centime.
         assert invoice.total_cents == round(invoice.subtotal_cents * (1 + float(invoice.vat_rate)))
+
+
+class TestFichierDisparuApresPreparation:
+    def test_le_client_ne_voit_jamais_une_trace_technique(
+        self, client, shared_collection, client_session, db_session
+    ) -> None:
+        """Un fichier peut disparaître entre la préparation et le téléchargement (purge,
+        incident). Sans filet, l'exception remonterait en `500` avec une trace sous les yeux
+        du client — et la livraison resterait « prête », donc réessayée en boucle."""
+        from apex.models.media import Media
+
+        headers = client_session["headers"]
+        _select(client, headers, shared_collection["media_ids"])
+        client.post(VALIDATE_URL, headers=headers)
+        _drain()
+        assert client.get(ARCHIVE_URL, headers=headers).status_code == 200
+
+        # Le fichier s'évapore après que la livraison a été déclarée prête.
+        db_session.get(Media, shared_collection["media_ids"][0]).storage_key_hd = None
+        db_session.commit()
+
+        response = client.get(ARCHIVE_URL, headers=headers)
+        assert response.status_code == 403
+        body = response.json()
+        assert body["code"] == "delivery_not_ready"
+        assert "studio" in body["message"].lower()
+
+        # Et le studio le voit, plutôt qu'un « prêt » mensonger.
+        delivery = db_session.execute(select(Delivery)).scalars().one()
+        db_session.refresh(delivery)
+        assert delivery.status == "failed"
+        assert delivery.error

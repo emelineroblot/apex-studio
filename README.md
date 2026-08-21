@@ -28,6 +28,30 @@ concerne. Fait à la main dans un explorateur de fichiers, c'est plusieurs soir�
 Le modèle propose, l'humain arbitre. Le taux de rattachement automatique est un indicateur
 de l'application, pas un chiffre caché.
 
+## L'espace client
+
+Une collection publiée se partage par un lien signé, valable quelques jours et révocable à
+tout moment. Le client y trouve ses photos en aperçu filigrané, coche celles qu'il veut,
+commente celles qui le méritent, puis valide.
+
+Cette validation est le point de bascule : la sélection se fige, l'archive haute définition
+se prépare, et une facture brouillon apparaît côté studio. Le client suit la préparation et
+télécharge quand c'est prêt. Aucun fichier haute définition ne sort avant ce moment.
+
+Le lien n'est affiché **qu'une fois** : la base n'en garde que l'empreinte, personne ne peut
+le réafficher — pas même le studio. Et sa révocation prend effet immédiatement, pas à
+l'expiration de la session en cours.
+
+## Facturation
+
+Une facture brouillon suit la sélection ; une facture émise ne bouge plus jamais. Ce n'est
+pas une règle applicative : deux triggers PostgreSQL refusent toute modification de ses
+lignes, et le retour de « émise » à « brouillon ». Trois tests attaquent la base
+directement pour le prouver, un quatrième vérifie qu'un brouillon reste bien modifiable.
+
+Un devis accepté crée le shooting correspondant, avec la même période — c'est cette période
+qui rattachera automatiquement les photos du week-end.
+
 ## Stack
 
 | Couche | Choix |
@@ -48,6 +72,22 @@ Aucune intégration tierce : la démo ne peut pas tomber pour une raison qui ne 
 | J1 | `feature/socle-ingestion` | Modèle de données, auth, client / shooting / engagements, upload, EXIF, doublons, intégrité |
 | J2 | `feature/ocr-recherche` | OCR, seuils, file de validation, recherche à facettes, collections |
 | J3 | `feature/espace-client` | Espace client, sélection, livraison HD, devis, facture, dashboard |
+
+## Vérifier que tout marche vraiment
+
+```bash
+cd services/api
+uv run pytest -q                            # 303 tests
+uv run python -m apex.cli seed --reset      # jeu de démonstration
+uv run uvicorn apex.main:app --port 8001    # dans un autre terminal
+python scripts/verify_j3_flow.py            # 34 vérifications de bout en bout
+```
+
+Le dernier script joue le parcours complet — partage, sélection, validation, archive,
+facture, révocation — contre l'API réelle et les données de la démonstration. Il existe
+parce que les tests, eux, fabriquent leurs propres données : c'est lui qui a révélé
+qu'aucune collection du jeu de démonstration n'était livrable, alors que les 303 tests
+étaient verts.
 
 ## Workflow git
 

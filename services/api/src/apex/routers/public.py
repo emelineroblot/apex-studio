@@ -571,7 +571,20 @@ def get_public_delivery_archive(
         chunks: Iterator[bytes] = body.chunks
         content_length = body.content_length
     else:
-        stream = delivery_service.build_zip_stream(db, storage, selection.id)
+        try:
+            stream = delivery_service.build_zip_stream(db, storage, selection.id)
+        except delivery_service.MissingOriginalError as exc:
+            # Un fichier a disparu entre la préparation et le téléchargement (purge de
+            # stockage, incident). Sans ce filet, l'exception remonterait en `500` avec une
+            # trace technique sous les yeux du client — ce que l'espace client s'interdit.
+            # La livraison repasse en échec pour que le studio le voie, plutôt que de
+            # laisser un « prêt » mensonger que le client réessaierait en boucle.
+            delivery.status = "failed"
+            delivery.error = str(exc)
+            db.commit()
+            raise _delivery_forbidden(
+                "Vos fichiers ne sont plus disponibles. Le studio a été prévenu."
+            ) from exc
         chunks = iter(stream)
         # `ZIP_STORED` permet d'annoncer la taille exacte avant d'avoir produit un octet :
         # le navigateur affiche une vraie progression au lieu d'un compteur qui tourne.

@@ -5,6 +5,23 @@ maj: 2026-08-21
 
 # Journal des runs
 
+## 2026-08-21 — J3, livraison et facturation (`feature/espace-client`)
+Livré : espace client par lien signé (jeton opaque, session courte, révocation immédiate),
+galerie filigranée, sélection commentée, archive ZIP construite en flux, facturation avec
+facture immuable une fois émise, devis dont l'acceptation crée le shooting, tableau de bord
+à quatre indicateurs, réinitialisation nocturne. Plus aucune route ne répond 501. 303 tests
+backend, 89 tests frontend, et 34 vérifications de bout en bout contre l'API réelle.
+Le fait notable : les 303 tests étaient verts alors qu'**aucune collection du jeu de
+démonstration n'était livrable** — le générateur ne posait aucun `storage_key_hd`, quand
+chaque test en fabriquait un. Un test bien isolé teste ce qu'il fabrique, pas ce qui existe.
+Deuxième fait notable : le tableau de bord allait afficher, sous le libellé « rattachement
+automatique », un chiffre calculé autrement que celui de l'écran qui porte déjà ce nom.
+Réutiliser coûte une requête ; diverger coûte la confiance dans les deux chiffres.
+Blackboard d'origine : `.agent-team/` (éphémère).
+Détail : `architecture.md#espace-client--cloisonné-par-construction-des-deux-côtés`,
+`architecture.md#filigrane--cuit-à-lingestion-pour-laperçu-appliqué-au-vol-pour-la-vignette`
+et `architecture.md#le-jeu-de-démonstration-doit-être-livrable-pas-seulement-affichable`.
+
 ## 2026-08-21 — Préparation du déploiement (`feature/preparation-deploiement`)
 Livré : Python figé à 3.12, moteur OCR sorti des dépendances de production (extra `ocr`),
 `scripts/check_prod_install.sh` (installation `pip` réelle en conteneur Linux + mesure de
