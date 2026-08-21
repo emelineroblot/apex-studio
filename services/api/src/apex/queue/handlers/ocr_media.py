@@ -16,6 +16,11 @@ coûteux, échoue différemment, et doit être relançable seul.
 (`accepted`/`rejected`), qui sont préservés. Rejouer le job converge donc vers le même
 état, sans jamais écraser une décision humaine ni empiler les doublons.
 
+**Le seul job du projet qui ne tourne pas partout** (`requires=(OCR_ENGINE,)`) : la fonction
+Vercel n'embarque pas le moteur (extra `ocr`, ~322 Mo, au-delà du plafond de 250 Mo). Un
+pilote sans moteur ne réclame pas ce job — il le laisse `pending` pour le worker qui l'a,
+plutôt que de le faire échouer trois fois puis mourir (`queue/capabilities.py`).
+
 **Un échec d'OCR ne quarantaine jamais un média.** Le fichier va très bien ; c'est la
 lecture qui n'a pas abouti. Le média reste `shooting_attached` et un `pipeline_event`
 motivé est écrit — le pipeline ne perd rien, il s'abstient (`AGENTS.md`, « l'IA propose »).
@@ -37,6 +42,7 @@ from apex.models.search import MediaOcrCandidate
 from apex.pipeline.ocr import classify
 from apex.pipeline.ocr.engine import get_engine
 from apex.pipeline.ocr.scoring import extract_readings
+from apex.queue.capabilities import OCR_ENGINE
 from apex.queue.registry import JobContext, handler
 from apex.services.ocr_settings import load_ocr_settings
 from apex.services.search_projection import project_media
@@ -106,7 +112,7 @@ def _load_preview(media: Media) -> Image.Image | None:
     return image
 
 
-@handler("ocr_media", max_attempts=3, on_dead=_on_dead)
+@handler("ocr_media", max_attempts=3, on_dead=_on_dead, requires=(OCR_ENGINE,))
 def handle_ocr_media(ctx: JobContext) -> dict[str, Any]:
     media_id = ctx.job.payload.get("media_id")
     if media_id is None:

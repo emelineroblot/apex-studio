@@ -8615,6 +8615,10 @@
               }
             ],
             "title": "Oldest Pending Age S"
+          },
+          "deferred": {
+            "type": "integer",
+            "title": "Deferred"
           }
         },
         "type": "object",
@@ -8622,7 +8626,8 @@
           "pending",
           "running",
           "dead",
-          "oldest_pending_age_s"
+          "oldest_pending_age_s",
+          "deferred"
         ],
         "title": "QueueStats"
       },
@@ -9717,6 +9722,10 @@
           "remaining": {
             "type": "integer",
             "title": "Remaining"
+          },
+          "deferred": {
+            "type": "integer",
+            "title": "Deferred"
           }
         },
         "type": "object",
@@ -9724,7 +9733,8 @@
           "claimed",
           "done",
           "failed",
-          "remaining"
+          "remaining",
+          "deferred"
         ],
         "title": "TickResponse"
       },

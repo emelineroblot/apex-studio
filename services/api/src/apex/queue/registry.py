@@ -9,7 +9,7 @@ explicitement (`status='failed'`) — jamais de silence (§3-E.3).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -51,21 +51,38 @@ class HandlerSpec:
     func: HandlerFunc
     max_attempts: int
     on_dead: OnDeadFunc | None = None
+    #: Capacités d'exécution exigées par ce handler (`queue.capabilities`). Un pilote qui
+    #: ne les a pas toutes ne **réclame jamais** ce type de job — il le laisse en file
+    #: pour un pilote capable, plutôt que de l'échouer trois fois puis de le tuer.
+    requires: frozenset[str] = frozenset()
 
 
 _REGISTRY: dict[str, HandlerSpec] = {}
 
 
 def handler(
-    kind: str, *, max_attempts: int = 3, on_dead: OnDeadFunc | None = None
+    kind: str,
+    *,
+    max_attempts: int = 3,
+    on_dead: OnDeadFunc | None = None,
+    requires: Iterable[str] = (),
 ) -> Callable[[HandlerFunc], HandlerFunc]:
-    """Décorateur d'enregistrement — `@handler("ingest_media", max_attempts=3)`."""
+    """Décorateur d'enregistrement — `@handler("ingest_media", max_attempts=3)`.
+
+    `requires` déclare les capacités d'exécution nécessaires (`queue.capabilities`) :
+    `@handler("ocr_media", requires=(OCR_ENGINE,))` rend ce job invisible des pilotes qui
+    n'embarquent pas le moteur OCR, sans que ces pilotes aient à connaître son existence.
+    """
 
     def decorator(func: HandlerFunc) -> HandlerFunc:
         if kind in _REGISTRY:
             raise ValueError(f"Handler déjà enregistré pour le type de job « {kind} ».")
         _REGISTRY[kind] = HandlerSpec(
-            kind=kind, func=func, max_attempts=max_attempts, on_dead=on_dead
+            kind=kind,
+            func=func,
+            max_attempts=max_attempts,
+            on_dead=on_dead,
+            requires=frozenset(requires),
         )
         return func
 
@@ -79,6 +96,20 @@ def get_handler(kind: str) -> HandlerSpec | None:
 
 def registered_kinds() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def unservable_kinds(capabilities: frozenset[str]) -> tuple[str, ...]:
+    """Types de jobs **enregistrés** qu'un processus doté de `capabilities` ne peut pas
+    exécuter — à exclure de la réclamation (`claim.claim_batch`).
+
+    Une exclusion, jamais une liste blanche : un `kind` **inconnu** du registre doit rester
+    réclamable pour échouer explicitement (§3-E.3, `runner._process_one`). Filtrer par
+    inclusion le rendrait invisible et le laisserait dormir en file — exactement le silence
+    que la règle interdit.
+    """
+    return tuple(
+        sorted(kind for kind, spec in _REGISTRY.items() if not spec.requires <= capabilities)
+    )
 
 
 def _reset_registry_for_tests() -> None:

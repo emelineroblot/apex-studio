@@ -26,6 +26,7 @@ import typer
 import apex.queue.handlers  # noqa: F401
 from apex.config import settings
 from apex.db import SessionLocal
+from apex.queue.capabilities import OCR_ENGINE, missing_capabilities
 from apex.queue.runner import DEFAULT_BATCH_SIZE, drain
 
 app = typer.Typer(help="CLI Apex — worker de la file de tâches (§3-E du plan).")
@@ -37,6 +38,27 @@ app.add_typer(worker_app, name="worker")
 
 IDLE_SLEEP_SECONDS = 0.5
 DEFAULT_ONCE_BUDGET_SECONDS = 240.0
+
+#: Ce qu'il faut installer pour retrouver une capacité manquante — le worker le dit au
+#: démarrage plutôt que de laisser des jobs s'accumuler sans explication.
+_CAPABILITY_REMEDY = {
+    OCR_ENGINE: (
+        "moteur OCR absent : les jobs « ocr_media » ne seront pas réclamés par ce worker "
+        "(ils restent en file, intacts). Installer avec « uv sync --extra ocr »."
+    )
+}
+
+
+def _warn_missing_capabilities() -> None:
+    """Avertit une fois au démarrage. C'est ce worker-ci qui est censé faire l'OCR — un
+    poste mal installé produirait sinon une file qui grossit en silence, exactement ce que
+    l'exclusion par capacité est censée éviter côté serverless."""
+    for capability in sorted(missing_capabilities()):
+        typer.secho(
+            f"⚠ {_CAPABILITY_REMEDY.get(capability, f'capacité manquante : {capability}')}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
 
 
 def _worker_id() -> str:
@@ -66,6 +88,7 @@ def worker(
         raise typer.BadParameter("Choisir exactement un mode : --loop ou --once.")
 
     worker_id = _worker_id()
+    _warn_missing_capabilities()
 
     if once:
         deadline = datetime.now(UTC) + timedelta(seconds=budget_seconds)
@@ -73,7 +96,8 @@ def worker(
         typer.echo(
             f"[{worker_id}] once : claimed={result.claimed} done={result.done} "
             f"failed={result.failed} dead={result.dead} requeued={result.requeued} "
-            f"reaped={result.reaped} remaining={result.remaining}"
+            f"reaped={result.reaped} remaining={result.remaining} "
+            f"deferred={result.deferred}"
         )
         return
 
@@ -85,7 +109,7 @@ def worker(
                 typer.echo(
                     f"[{worker_id}] tick : claimed={result.claimed} done={result.done} "
                     f"failed={result.failed} dead={result.dead} requeued={result.requeued} "
-                    f"remaining={result.remaining}"
+                    f"remaining={result.remaining} deferred={result.deferred}"
                 )
             else:
                 time.sleep(IDLE_SLEEP_SECONDS)
