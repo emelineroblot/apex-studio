@@ -146,6 +146,12 @@ Voir `services/api/.env.example` pour la liste complète. Deux méritent une men
   précisément dans le cas visé — la variable oubliée au déploiement.
 - **`STORAGE_BACKEND`** — `local` (écrit dans `./storage`, gitignoré) ou `s3`.
 
+## Déploiement
+
+Deux projets Vercel (`apex-web` = `apps/web`, `apex-api` = `services/api`), une base Neon, un
+bucket R2, et l'OCR exécuté depuis un poste par `apex.cli worker --loop`. Procédure complète,
+variables et limites connues : **`docs/deploiement.md`**.
+
 ## Jalons
 
 | Jalon | Branche | Contenu |
