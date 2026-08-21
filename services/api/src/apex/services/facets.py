@@ -192,7 +192,7 @@ def _base_predicates(user: AppUser, filters: SearchFilters) -> list[ColumnElemen
     qu'ils ne sont pas des facettes multi-sélection (§3-K.2).
     """
     ms = MediaSearch
-    preds: list[ColumnElement[bool]] = [ms.duplicate_of_media_id.is_(None)]
+    preds: list[ColumnElement[bool]] = [access.exclude_duplicates_clause(ms.duplicate_of_media_id)]
     visibility = visibility_clause(user)
     if visibility is not None:
         preds.append(visibility)
@@ -211,7 +211,22 @@ def _base_predicates(user: AppUser, filters: SearchFilters) -> list[ColumnElemen
     if filters.date_to is not None:
         preds.append(ms.shot_at <= filters.date_to)
     if filters.series == "collapsed":
-        preds.append(ms.is_series_representative.is_(True))
+        # Intégration live J2 (🔴, cf. `.agent-team/implementation.md`) : cette règle avait
+        # été réimplémentée ici sans reprendre la clause de défense « média sans shooting »
+        # ajoutée en clôture de J1 dans `routers/media.py::list_media` — un média
+        # `shooting_id IS NULL` a `is_series_representative=False` par défaut (jamais passé
+        # par le regroupement de rafales, qui ne s'exécute que pour un shooting donné), donc
+        # `is_series_representative.is_(True)` seul masquait structurellement tout le bac
+        # « à rattacher » et sous-comptait les autres statuts non représentatifs de série.
+        # Désormais la même fonction que `routers/media.py`, une seule source
+        # (`access.series_collapse_clause`) — voir son docstring pour le détail complet.
+        preds.append(
+            access.series_collapse_clause(
+                series_id=ms.series_id,
+                is_series_representative=ms.is_series_representative,
+                shooting_id=ms.shooting_id,
+            )
+        )
     return preds
 
 

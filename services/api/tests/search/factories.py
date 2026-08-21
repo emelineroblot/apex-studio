@@ -14,7 +14,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from apex.models.catalog import Camera, Circuit, Client, Driver, Team
-from apex.models.media import Media, MediaEngagement, UploadBatch
+from apex.models.media import Media, MediaEngagement, MediaSeries, UploadBatch
 from apex.models.shooting import Engagement, Shooting
 from apex.models.user import AppUser
 
@@ -108,12 +108,16 @@ def make_media(
     shot_at: datetime,
     attachment_status: str = "unattached",
     attachment_source: str | None = None,
+    ingest_status: str = "ingested",
+    quarantine_reason: str | None = None,
     iso: int | None = None,
     focal_length: float | None = None,
     lens_model: str | None = None,
     caption: str | None = None,
     keywords: list[str] | None = None,
     is_series_representative: bool = True,
+    series_id: int | None = None,
+    duplicate_of_media_id: int | None = None,
     engagements: list[Engagement] | None = None,
     engagement_source: str = "ocr",
 ) -> Media:
@@ -123,7 +127,8 @@ def make_media(
         idempotency_key=f"test-{uuid4().hex}",
         original_filename="test.jpg",
         byte_size=1_000_000,
-        ingest_status="ingested",
+        ingest_status=ingest_status,
+        quarantine_reason=quarantine_reason,
         shooting_id=shooting.id if shooting else None,
         camera_id=camera.id if camera else None,
         shot_at=shot_at,
@@ -136,6 +141,8 @@ def make_media(
         caption=caption,
         keywords=keywords,
         is_series_representative=is_series_representative,
+        series_id=series_id,
+        duplicate_of_media_id=duplicate_of_media_id,
     )
     session.add(media)
     session.flush()
@@ -148,6 +155,39 @@ def make_media(
         )
     session.flush()
     return media
+
+
+def make_media_series(
+    session: Session,
+    *,
+    shooting: Shooting,
+    camera: Camera | None,
+    members: list[Media],
+    representative: Media,
+) -> MediaSeries:
+    """Matérialise une série sur des médias **déjà créés** (`make_media`, `series_id=None`
+    par défaut) — mêmes étapes que `pipeline/series.py::regroup_bursts_for_shooting`
+    (créer la ligne `media_series`, puis rattacher chaque membre), pour un test qui n'a pas
+    besoin de vraies images/rafales.
+    """
+    assert representative in members, "le représentant doit être un des membres"
+    shot_ats = [m.shot_at for m in members if m.shot_at is not None]
+    series = MediaSeries(
+        shooting_id=shooting.id,
+        camera_id=camera.id if camera else None,
+        started_at=min(shot_ats),
+        ended_at=max(shot_ats),
+        representative_media_id=None,
+        member_count=len(members),
+    )
+    session.add(series)
+    session.flush()
+    series.representative_media_id = representative.id
+    for member in members:
+        member.series_id = series.id
+        member.is_series_representative = member.id == representative.id
+    session.flush()
+    return series
 
 
 def as_ids(items: list[dict[str, Any]]) -> set[int]:

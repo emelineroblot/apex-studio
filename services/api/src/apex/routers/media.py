@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -107,7 +107,7 @@ def list_media(
     if duplicates:
         stmt = stmt.where(Media.duplicate_of_media_id.is_not(None))
     else:
-        stmt = stmt.where(Media.duplicate_of_media_id.is_(None))
+        stmt = stmt.where(access.exclude_duplicates_clause(Media.duplicate_of_media_id))
     # Intégration live J1 : `MediaSummary` n'exposait ni `series_id` ni le compte de la
     # série, empêchant la grille de satisfaire « une rafale est regroupée en série et
     # n'affiche qu'un représentant » (critère d'acceptation J1). Par défaut
@@ -116,17 +116,14 @@ def list_media(
     # fiche) — nommage symétrique au `series=collapsed|all` déjà prévu pour `GET /search`
     # (§3-K.2 du plan).
     if series == "collapsed":
-        # Revue J1 (🔴) : défense en profondeur, indépendante du correctif source dans
-        # `reattach_camera` — un média sans shooting ne peut légitimement appartenir à
-        # aucune série, quelle que soit la fraîcheur de `series_id`/
-        # `is_series_representative` en base (ex. un recalcul de rattachement qui aurait
-        # laissé le média orphelin sans requalifier sa série). Cette clause rend
-        # structurellement impossible qu'un tel orphelin soit masqué par le collapse.
+        # Revue J1 (🔴) : défense en profondeur (voir docstring de
+        # `access.series_collapse_clause` — factorisée depuis ce lot précisément parce que
+        # `services/facets.py` avait réimplémenté cette règle sans la reprendre).
         stmt = stmt.where(
-            or_(
-                Media.series_id.is_(None),
-                Media.is_series_representative.is_(True),
-                Media.shooting_id.is_(None),
+            access.series_collapse_clause(
+                series_id=Media.series_id,
+                is_series_representative=Media.is_series_representative,
+                shooting_id=Media.shooting_id,
             )
         )
     visibility = access.media_visibility_clause(user)
