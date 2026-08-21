@@ -19,9 +19,13 @@ from sqlalchemy.orm import Session
 
 from apex.demo import seed as seed_module
 from apex.models.catalog import Client, Driver
-from apex.models.media import Media
+from apex.models.media import Media, MediaEngagement
 from apex.models.shooting import Engagement, Shooting
+from apex.models.user import AppUser
 from apex.pipeline.ocr import classify
+from tests.conftest import auth_headers
+
+API = "/api/v1"
 
 
 def _fingerprint(session: Session) -> str:
@@ -189,3 +193,101 @@ class TestFullVolumeMatchesThePlanTargets:
         # porter un candidat `auto` — tolérance large (tirage stochastique, cf. §3-N.1).
         assert distribution.auto / counts.get("engagement_attached", 1) > 0.5
         assert distribution.abstain > 0, "aucun candidat sous le seuil bas : rien à redistribuer"
+
+
+class TestPendingReviewNeverMaterialisesAnEngagementAtSeedTime:
+    """Intégration live J2 finale : `GET /stats/auto-attach-rate.auto_ocr` (`4875 → 4697`,
+    -178) divergeait de `GET /settings/ocr.distribution.auto` et de la facette `/search`
+    `status=engagement_attached` (toutes deux `4461 → 4697`, +236) après une baisse du
+    seuil haut — alors qu'un seuil plus permissif ne peut que créer des rattachements.
+
+    Cause racine : `_create_simulated_media` posait une ligne `media_engagement` pour
+    **tout** média du bac `pending_review` (`group_engagement_ids` est peuplé pour ce bac
+    aussi, § `_plan_shooting_media`, pour connaître l'engagement visé par son candidat OCR),
+    alors que ce bac n'a — par construction — encore aucun rattachement matérialisé : seules
+    `auto`/`accepted` (`classify.ATTACHING_RESOLUTIONS`) en créent un en production
+    (`classify._materialise_links`). `auto_attach_rate.auto_ocr` compte par `EXISTS
+    media_engagement` (média), tandis que `distribution.auto` compte des candidats
+    `resolution='auto'` : le premier était donc gonflé de la taille de la file de
+    validation, jusqu'à ce qu'une première projection (`PUT /settings/ocr`, `POST
+    /jobs/tick`) retire ces liens fantômes — donnant l'illusion d'un recul.
+    """
+
+    def test_a_freshly_seeded_pending_review_media_has_no_media_engagement(
+        self, db_session: Session, small_seed
+    ) -> None:
+        seed_module.run_seed(db_session, reset=True)
+        db_session.commit()
+
+        pending_review_ids = {
+            int(row)
+            for row in db_session.execute(
+                select(Media.id).where(Media.attachment_status == "pending_review")
+            ).scalars()
+        }
+        assert pending_review_ids, "le jeu de démo doit produire des médias en file de validation"
+
+        phantom_ids = {
+            int(row)
+            for row in db_session.execute(
+                select(MediaEngagement.media_id).where(
+                    MediaEngagement.media_id.in_(pending_review_ids)
+                )
+            ).scalars()
+        }
+        assert not phantom_ids, (
+            "un média `pending_review` porte déjà un `media_engagement` au sortir du seed — "
+            "c'est ce qui gonflait artificiellement `auto_ocr` avant la première projection"
+        )
+
+
+class TestAutoAttachIndicatorsAgreeAfterLoweringTheThreshold:
+    """Verrou de non-régression, cross-endpoints (même esprit que
+    `tests/search/test_media_search_agreement.py`) : `GET /settings/ocr`, `GET
+    /stats/auto-attach-rate` et `GET /search` doivent raconter la même histoire après une
+    baisse du seuil haut. Une baisse de seuil ne peut que **créer** des rattachements
+    automatiques — aucun des trois indicateurs ne doit donc jamais reculer.
+    """
+
+    def test_lowering_the_high_threshold_never_decreases_any_auto_attach_indicator(
+        self, client, db_session: Session, small_seed
+    ) -> None:
+        seed_module.run_seed(db_session, reset=True)
+        db_session.commit()
+        owner = db_session.execute(select(AppUser).where(AppUser.role == "owner")).scalar_one()
+        headers = auth_headers(owner)
+
+        def _snapshot() -> tuple[int, int, int]:
+            settings_payload = client.get(f"{API}/settings/ocr", headers=headers).json()
+            stats_payload = client.get(f"{API}/stats/auto-attach-rate", headers=headers).json()
+            search_payload = client.get(
+                f"{API}/search",
+                params={"series": "all", "status": ["engagement_attached"], "limit": 1},
+                headers=headers,
+            ).json()
+            return (
+                settings_payload["distribution"]["auto"],
+                stats_payload["auto_ocr"],
+                search_payload["total"],
+            )
+
+        before_distribution_auto, before_auto_ocr, before_attached = _snapshot()
+
+        response = client.put(
+            f"{API}/settings/ocr", headers=headers, json={"high": 0.60, "low": 0.45}
+        )
+        assert response.status_code == 200, response.text
+
+        after_distribution_auto, after_auto_ocr, after_attached = _snapshot()
+
+        # La baisse doit effectivement redistribuer quelque chose — sinon le test ne
+        # vérifie rien (§3-N.1, candidats `pending_review` du jeu de démo à score
+        # 0,46-0,79, au moins une partie franchit 0,60).
+        assert after_distribution_auto > before_distribution_auto
+
+        assert after_distribution_auto >= before_distribution_auto
+        assert after_auto_ocr >= before_auto_ocr, (
+            "auto_ocr a reculé après une baisse du seuil haut — deux écrans du produit se "
+            "contrediraient devant un prospect (intégration live J2 finale)"
+        )
+        assert after_attached >= before_attached

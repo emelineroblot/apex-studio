@@ -162,6 +162,17 @@ _QUARANTINE_RATE = 0.01  # tiré indépendamment, en plus des buckets ci-dessus 
 # - un candidat `abstain` pour une part des médias non rattachés à un engagement
 #   (`shooting_attached`/`unattached`) — une hypothèse basse confiance, cohérente avec
 #   « le modèle a bien lu quelque chose, pas assez sûr pour rattacher ».
+#
+# **Suite, intégration live J2 finale** : ce correctif a *aussi* introduit `group_engagement_ids`
+# pour le bac `pending_review` (nécessaire pour donner à son candidat le bon `engagement_id`
+# suggéré, § `_plan_shooting_media`) — mais la boucle de matérialisation des rattachements
+# (plus bas, § `_create_simulated_media`) ne distinguait pas les bacs et posait une ligne
+# `media_engagement` pour `pending_review` aussi, alors que ce bac n'en a, par construction,
+# encore aucun (seules `auto`/`accepted` en matérialisent un en production, §
+# `classify.ATTACHING_RESOLUTIONS`). Nouvelle contradiction du même type que celle
+# ci-dessus, cette fois entre `auto_ocr` (`GET /stats/auto-attach-rate`, compte par `EXISTS
+# media_engagement`) et `distribution.auto`/la facette `engagement_attached` de `/search` —
+# corrigée en restreignant cette matérialisation au seul bac `engagement_attached`.
 _LOW_CONFIDENCE_SAMPLE_RATE = 0.45
 
 # TRUNCATE (§3-N.2) — la table `job` n'y figure jamais (un job en cours pourrait s'y trouver,
@@ -802,33 +813,49 @@ def _create_simulated_media(
     counts: dict[str, int] = {}
     for planned, media_id in zip(all_planned, inserted_ids, strict=True):
         counts[planned.bucket] = counts.get(planned.bucket, 0) + 1
-        for engagement_id in planned.engagement_ids:
-            source = planned.row.get("attachment_source") or "pipeline_ocr"
-            # 🟠 n°9 : quand ce rattachement est justifié par le candidat OCR généré
-            # ci-dessus pour ce média (même `engagement_id`), reprendre **sa** confiance —
-            # c'est exactement ce que fait `classify._materialise_links` en production
-            # (`confidence=float(candidate.confidence)`). Un second rattachement de la même
-            # rafale multi-voiture (k=2, sans candidat propre) retombe sur l'ancien tirage
-            # indépendant.
-            candidate_confidence = (
-                planned.ocr_candidate["confidence"]
-                if planned.ocr_candidate is not None
-                and planned.ocr_candidate.get("engagement_id") == engagement_id
-                else None
-            )
-            engagement_rows.append(
-                {
-                    "media_id": media_id,
-                    "engagement_id": engagement_id,
-                    "source": "human" if source == "human" else "ocr",
-                    "confidence": (
-                        None
-                        if source == "human"
-                        else candidate_confidence or round(rng.uniform(0.85, 0.99), 4)
-                    ),
-                    "created_by": photographer.id if source == "human" else None,
-                }
-            )
+        # `group_engagement_ids` (→ `planned.engagement_ids`) est peuplé pour deux bacs
+        # (§ `_plan_shooting_media` : `engagement_attached` ET `pending_review`, ce dernier
+        # pour connaître l'engagement visé par son candidat OCR ci-dessous). Seul le premier
+        # doit matérialiser une ligne `media_engagement` : `pending_review` n'a, par
+        # construction, encore **aucun** rattachement — c'est même le sens du bac (file de
+        # validation humaine, § tableau des issues de `pipeline/ocr/classify.py`, dont seules
+        # `auto`/`accepted` — `ATTACHING_RESOLUTIONS` — matérialisent un lien en production).
+        # Avant ce correctif, une ligne `media_engagement` fictive (`source='pipeline_ocr'`,
+        # `created_by=None`) était posée ici pour `pending_review` aussi, gonflant
+        # artificiellement `GET /stats/auto-attach-rate.auto_ocr` (qui compte par `EXISTS
+        # media_engagement`) de la taille de la file de validation — jusqu'à ce qu'une
+        # première projection (`PUT /settings/ocr`, `POST /jobs/tick`) la retire, donnant
+        # l'illusion d'une baisse du rattachement automatique. § doc de
+        # `routers/stats.py::auto_attach_rate` et `tests/demo/test_seed.py` pour le
+        # verrou de non-régression.
+        if planned.bucket == "engagement_attached":
+            for engagement_id in planned.engagement_ids:
+                source = planned.row.get("attachment_source") or "pipeline_ocr"
+                # 🟠 n°9 : quand ce rattachement est justifié par le candidat OCR généré
+                # ci-dessus pour ce média (même `engagement_id`), reprendre **sa** confiance —
+                # c'est exactement ce que fait `classify._materialise_links` en production
+                # (`confidence=float(candidate.confidence)`). Un second rattachement de la
+                # même rafale multi-voiture (k=2, sans candidat propre) retombe sur l'ancien
+                # tirage indépendant.
+                candidate_confidence = (
+                    planned.ocr_candidate["confidence"]
+                    if planned.ocr_candidate is not None
+                    and planned.ocr_candidate.get("engagement_id") == engagement_id
+                    else None
+                )
+                engagement_rows.append(
+                    {
+                        "media_id": media_id,
+                        "engagement_id": engagement_id,
+                        "source": "human" if source == "human" else "ocr",
+                        "confidence": (
+                            None
+                            if source == "human"
+                            else candidate_confidence or round(rng.uniform(0.85, 0.99), 4)
+                        ),
+                        "created_by": photographer.id if source == "human" else None,
+                    }
+                )
         if planned.ocr_candidate is not None:
             candidate_rows.append(
                 {

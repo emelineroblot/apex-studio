@@ -20,6 +20,30 @@ Une photo arbitrée en file de validation compte donc en `human`, **pas** en aut
 c'est précisément ce que ce taux doit mesurer. Y compter les validations humaines
 reviendrait à se mentir sur la seule métrique que le produit expose.
 
+## `auto_ocr` compte des **médias**, `GET /settings/ocr.distribution.auto` compte des
+## **candidats** — les deux doivent malgré tout converger
+
+`auto_ocr` ci-dessus est une agrégation `EXISTS` sur `media_engagement` : elle répond
+« combien de **médias** portent un rattachement automatique ». `distribution.auto`
+(`pipeline/ocr/classify.py::current_distribution`) répond à une question voisine mais
+distincte : « combien de **candidats** `media_ocr_candidate` sont résolus `auto` (ou
+`accepted`) ». Un média ne porte qu'un seul candidat *attaché* dans l'immense majorité des
+cas du jeu de démo (§3-N.1) — les deux comptes coïncident donc en pratique, mais ce n'est
+pas une identité garantie par construction (un média à deux voitures dans le cadre peut
+porter deux candidats/deux rattachements).
+
+**Ce qui, en revanche, est un invariant garanti par construction** : baisser le seuil haut
+(`PUT /settings/ocr`) ne peut que **créer** des rattachements automatiques
+(`classify._materialise_links` ne supprime que les liens `source='ocr'` qu'un seuil
+*relevé* ne justifie plus) — donc ni `auto_ocr`, ni `distribution.auto`, ni la facette
+`GET /search?status=engagement_attached` ne doivent jamais reculer à la suite d'une telle
+baisse. Une divergence entre ces trois lectures après une baisse de seuil n'est **jamais**
+une différence de définition légitime : c'est un défaut de données (verrouillé par
+`tests/demo/test_seed.py::TestAutoAttachIndicatorsAgreeAfterLoweringTheThreshold`, qui a
+justement pris ce défaut en défaut — § son docstring pour l'historique : un média
+`pending_review` du générateur de démo portait à tort une ligne `media_engagement` avant
+sa première projection, gonflant `auto_ocr` d'autant).
+
 ## Ventilation réel / simulé (revue J2, 🟠 n°1, §3-N.1 du plan)
 
 Les champs de tête (`total`, `auto_time`, …, `rate`) restent l'agrégat **toutes origines
