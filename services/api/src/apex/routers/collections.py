@@ -159,6 +159,7 @@ def _filters_from_payload(payload: FromSearchFilters) -> SearchFilters:
         date_from=payload.date_from,
         date_to=payload.date_to,
         status=payload.status,
+        is_simulated=payload.is_simulated,
         series=payload.series,
     )
 

@@ -36,6 +36,8 @@ class FromSearchFilters(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
     status: list[str] | None = None
+    #: Revue J2 (🟠 n°1) — même contrat que `GET /search?is_simulated=`.
+    is_simulated: bool | None = None
     series: SeriesMode = "collapsed"
 
 

@@ -309,6 +309,17 @@ def create_engagement(
             },
         ) from exc
     db.refresh(engagement)
+
+    # Correction backend J2 (§ `.agent-team/review-j2.md` — trou signalé hors liste de revue,
+    # même classe que le 🟠 n°2) : cette création isolée n'était pas câblée à la reprojection,
+    # contrairement à l'import CSV (`import_engagements`, quelques lignes plus bas) qui traite
+    # exactement le même cas — « engagement oublié à la saisie » — un candidat OCR
+    # `not_engaged` faute d'engagement peut désormais matcher le numéro tout juste créé.
+    media_ids = classify.media_ids_with_reprojectable_candidates(db, shooting_id)
+    if media_ids:
+        classify.project_media_batch(db, media_ids, load_ocr_settings(db))
+        project_media_search(db, media_ids)
+        db.commit()
     return EngagementOut.model_validate(engagement)
 
 

@@ -449,6 +449,67 @@ class TestTauxDeRattachementAutomatique:
         assert payload["unattached"] == 1
         assert payload["rate"] == 0.5
 
+        # Revue J2 (🟠 n°1, §3-N.1) — ventilation par origine : les 4 médias de ce test sont
+        # tous réels (`is_simulated=False` par défaut, `tests/ocr/conftest.py::make_media`).
+        # `real` doit donc reproduire exactement l'agrégat de tête, `simulated` rester à zéro.
+        assert payload["real"] == {
+            "total": 4,
+            "auto_time": 1,
+            "auto_ocr": 1,
+            "human": 1,
+            "unattached": 1,
+            "rate": 0.5,
+        }
+        assert payload["simulated"] == {
+            "total": 0,
+            "auto_time": 0,
+            "auto_ocr": 0,
+            "human": 0,
+            "unattached": 0,
+            "rate": 0.0,
+        }
+
+    def test_the_rate_is_ventilated_by_origin_rather_than_blended(
+        self, client, db_session, owner, shooting, batch
+    ):
+        """Scénario de la revue J2 (🟠 n°1) : un jeu simulé à 100 % ne doit jamais se lire
+        comme un jeu réel — la ventilation doit isoler les deux populations, pas seulement
+        les compter à part dans un total commun.
+        """
+        real_auto = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="ven-real"
+        )
+        add_candidate(db_session, real_auto, number="12", score=0.95)
+
+        simulated_auto = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="ven-sim"
+        )
+        simulated_auto.is_simulated = True
+        add_candidate(db_session, simulated_auto, number="250", score=0.95)
+
+        _project(db_session, [real_auto, simulated_auto])
+
+        payload = client.get(f"{API}/stats/auto-attach-rate", headers=auth_headers(owner)).json()
+        assert payload["total"] == 2
+        assert payload["rate"] == 1.0
+
+        assert payload["real"] == {
+            "total": 1,
+            "auto_time": 0,
+            "auto_ocr": 1,
+            "human": 0,
+            "unattached": 0,
+            "rate": 1.0,
+        }
+        assert payload["simulated"] == {
+            "total": 1,
+            "auto_time": 0,
+            "auto_ocr": 1,
+            "human": 0,
+            "unattached": 0,
+            "rate": 1.0,
+        }
+
     def test_the_rate_can_be_scoped_to_a_shooting(self, client, db_session, owner, shooting, batch):
         media = make_media(db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="sc")
         add_candidate(db_session, media, number="12", score=0.95)
@@ -463,14 +524,19 @@ class TestTauxDeRattachementAutomatique:
     def test_an_empty_scope_reports_zero_rather_than_dividing_by_zero(
         self, client, db_session, owner
     ):
-        payload = client.get(f"{API}/stats/auto-attach-rate", headers=auth_headers(owner)).json()
-        assert payload == {
+        empty_population = {
             "total": 0,
             "auto_time": 0,
             "auto_ocr": 0,
             "human": 0,
             "unattached": 0,
             "rate": 0.0,
+        }
+        payload = client.get(f"{API}/stats/auto-attach-rate", headers=auth_headers(owner)).json()
+        assert payload == {
+            **empty_population,
+            "real": empty_population,
+            "simulated": empty_population,
         }
 
 

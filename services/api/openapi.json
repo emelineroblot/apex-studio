@@ -2646,6 +2646,22 @@
             }
           },
           {
+            "name": "is_simulated",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Simulated"
+            }
+          },
+          {
             "name": "series",
             "in": "query",
             "required": false,
@@ -4655,6 +4671,53 @@
           "rate": {
             "type": "number",
             "title": "Rate"
+          },
+          "real": {
+            "$ref": "#/components/schemas/AutoAttachRatePopulation"
+          },
+          "simulated": {
+            "$ref": "#/components/schemas/AutoAttachRatePopulation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "auto_time",
+          "auto_ocr",
+          "human",
+          "unattached",
+          "rate",
+          "real",
+          "simulated"
+        ],
+        "title": "AutoAttachRate",
+        "description": "Champs de tête : agrégat **toutes origines confondues** (rétrocompatible avec la\nforme d'origine du contrat). `real`/`simulated` (revue J2, 🟠 n°1, §3-N.1 du plan)\nventilent le même calcul par `media.is_simulated` — un tableau de bord ne doit jamais\nannoncer un taux sans pouvoir dire sur quelle population il porte."
+      },
+      "AutoAttachRatePopulation": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "auto_time": {
+            "type": "integer",
+            "title": "Auto Time"
+          },
+          "auto_ocr": {
+            "type": "integer",
+            "title": "Auto Ocr"
+          },
+          "human": {
+            "type": "integer",
+            "title": "Human"
+          },
+          "unattached": {
+            "type": "integer",
+            "title": "Unattached"
+          },
+          "rate": {
+            "type": "number",
+            "title": "Rate"
           }
         },
         "type": "object",
@@ -4666,7 +4729,8 @@
           "unattached",
           "rate"
         ],
-        "title": "AutoAttachRate"
+        "title": "AutoAttachRatePopulation",
+        "description": "Même décompte que `AutoAttachRate`, restreint à une seule population (réel ou simulé)."
       },
       "BatchCloseResponse": {
         "properties": {
@@ -6413,6 +6477,17 @@
               }
             ],
             "title": "Status"
+          },
+          "is_simulated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Simulated"
           },
           "series": {
             "type": "string",

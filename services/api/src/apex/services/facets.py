@@ -77,6 +77,13 @@ class SearchFilters:
     date_to: datetime | None = None
     status: list[str] | None = None
     series: SeriesMode = "collapsed"
+    #: Revue J2 (🟠 n°1, §3-N.1 du plan) — origine du média, mono-sélection à 3 états :
+    #: `None` = tous, `False` = réels seulement, `True` = simulés seulement. Toujours
+    #: appliqué (pas une facette à compteurs comme les autres) : la colonne est projetée
+    #: dans `media_search` mais n'a pas de panneau de comptage par valeur, seulement un
+    #: filtre — le frontend l'expose via un contrôle à 3 options (`FacetOriginToggle`),
+    #: pas une case à cocher multi-sélection.
+    is_simulated: bool | None = None
 
 
 @dataclass(slots=True)
@@ -214,6 +221,8 @@ def _base_predicates(user: AppUser, filters: SearchFilters) -> list[ColumnElemen
         preds.append(ms.shot_at >= filters.date_from)
     if filters.date_to is not None:
         preds.append(ms.shot_at <= filters.date_to)
+    if filters.is_simulated is not None:
+        preds.append(ms.is_simulated.is_(filters.is_simulated))
     if filters.series == "collapsed":
         # Intégration live J2 (🔴, cf. `.agent-team/implementation.md`) : cette règle avait
         # été réimplémentée ici sans reprendre la clause de défense « média sans shooting »

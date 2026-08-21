@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from apex.db import SessionLocal
 from apex.models.catalog import Camera
 from apex.models.search import MediaOcrCandidate, MediaSearch
-from apex.pipeline.ocr.classify import RESOLUTION_REVIEW
+from apex.pipeline.ocr.classify import RESOLUTION_NOT_ENGAGED, RESOLUTION_REVIEW
 from apex.queue.runner import drain
 from apex.services.ocr_settings import ENGINE_VERSION_DEFAULT
 from apex.services.search_projection import project_media_search
@@ -345,3 +345,66 @@ class TestReindexAfterThresholdReclassification:
         row = _search_row(db_session, media.id)
         assert row.attachment_status == "engagement_attached"
         assert row.team_ids == [team.id]
+
+
+class TestReindexAfterEngagementCreation:
+    def test_creating_an_engagement_reprojects_media_stuck_as_inconsistent(
+        self, client, db_session
+    ) -> None:
+        """`POST /shootings/{id}/engagements` (création isolée, hors import CSV) — revue J2
+        (correction backend, § `.agent-team/review-j2.md` 🟠 1, même classe que le 🟠 n°2 déjà
+        fermé pour `PATCH`/`DELETE /engagements/{id}` et l'import CSV). Un numéro « oublié à
+        la saisie » laisse le média `inconsistent` (`not_engaged`) : créer l'engagement qui
+        le justifie doit rattacher le média **sans ré-inférence**, et `media_search` doit
+        suivre dans la même requête — pas seulement `media.attachment_status`.
+        """
+        owner = make_user(
+            db_session, role="owner", email="owner-reindex-create-engagement@apex-test.dev"
+        )
+        headers = auth_headers(owner)
+        circuit = make_circuit(db_session, "Circuit Création Engagement")
+        demo_client = make_client(db_session, "Client Création Engagement")
+        team = make_team(db_session, "Écurie Création Engagement", demo_client)
+        shooting = make_shooting(
+            db_session, client=demo_client, circuit=circuit, starts_at=datetime.now(UTC)
+        )
+        batch = make_upload_batch(db_session, user=owner)
+        media = make_media(
+            db_session,
+            batch=batch,
+            user=owner,
+            shooting=shooting,
+            shot_at=datetime.now(UTC),
+            attachment_status="inconsistent",
+        )
+        # Numéro lu avec un score qui rattacherait automatiquement une fois engagé, mais
+        # aucun engagement « 77 » n'existe encore sur ce shooting — `not_engaged`, jamais
+        # rattaché de force (§ invariant transverse « l'IA propose, l'humain arbitre »).
+        candidate = MediaOcrCandidate(
+            media_id=media.id,
+            raw_text="77",
+            normalized_number="77",
+            confidence=0.95,
+            bbox={"x": 0.4, "y": 0.4, "w": 0.1, "h": 0.1},
+            engine_version=ENGINE_VERSION_DEFAULT,
+            resolution=RESOLUTION_NOT_ENGAGED,
+            engagement_id=None,
+        )
+        db_session.add(candidate)
+        db_session.commit()
+        project_media_search(db_session, None)
+        db_session.commit()
+
+        assert _search_row(db_session, media.id).attachment_status == "inconsistent"
+
+        resp = client.post(
+            f"/api/v1/shootings/{shooting.id}/engagements",
+            json={"car_number": "77", "team_id": team.id},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+
+        row = _search_row(db_session, media.id)
+        assert row.attachment_status == "engagement_attached"
+        assert row.team_ids == [team.id]
+        assert row.car_numbers == ["77"]

@@ -1,34 +1,34 @@
 # Performance de la recherche à facettes — mesure réelle
 
-Généré le 2026-08-21T05:00:22+00:00 par `tests/search/test_perf.py::test_search_p95_latency_on_the_full_demo_dataset`.
+Généré le 2026-08-21T05:23:48+00:00 par `tests/search/test_perf.py::test_search_p95_latency_on_the_full_demo_dataset`.
 
 **Jeu de démo** : 7917 médias (`apex.demo.seed.run_seed`, graine fixe, ~8000 simulés + réels si `demo-photos/` est peuplé).
 
-**p95 (round-trip client, `TestClient` local)** : 52.4 ms — budget critère d'acceptation : 300 ms.
-**p95 (`took_ms`, mesuré côté serveur, exposé dans la réponse)** : 45.3 ms.
+**p95 (round-trip client, `TestClient` local)** : 66.8 ms — budget critère d'acceptation : 300 ms.
+**p95 (`took_ms`, mesuré côté serveur, exposé dans la réponse)** : 58.5 ms.
 
 | Requête | Round-trip (ms) | `took_ms` serveur (ms) | Résultats totaux |
 |---|---:|---:|---:|
-| parcours sans filtre (page 1) | 44.4 | 35.2 | 1912 |
-| parcours sans filtre, tri croissant | 38.0 | 31.3 | 1912 |
-| un seul shooting | 42.4 | 35.5 | 122 |
-| un seul client | 37.7 | 29.3 | 198 |
-| une seule écurie | 35.6 | 28.7 | 122 |
-| un seul circuit | 41.4 | 35.0 | 207 |
-| statut engagement_attached | 38.2 | 31.9 | 1259 |
-| statut pending_review (file de validation) | 27.6 | 20.9 | 87 |
-| shooting + statut combinés | 43.0 | 35.6 | 99 |
-| client + écurie + statut combinés | 40.0 | 31.9 | 0 |
-| plage ISO | 46.8 | 40.2 | 1560 |
-| plage focale | 48.6 | 41.6 | 823 |
-| plein texte, terme fréquent | 43.7 | 35.5 | 240 |
-| plein texte, exclusion | 49.8 | 43.2 | 90 |
-| rafales toutes (non groupées) | 52.5 | 45.4 | 7917 |
-| plage de dates | 45.1 | 38.4 | 1912 |
-| page 2 (curseur) | 38.8 | 32.1 | 1912 |
-| grande page (limite haute) | 38.9 | 32.3 | 1912 |
-| shooting inexistant (ensemble vide) | 21.4 | 15.7 | 0 |
-| combinaison la plus large | 44.0 | 38.4 | 0 |
+| parcours sans filtre (page 1) | 41.4 | 33.6 | 1912 |
+| parcours sans filtre, tri croissant | 33.7 | 27.9 | 1912 |
+| un seul shooting | 28.4 | 22.8 | 122 |
+| un seul client | 30.1 | 24.1 | 198 |
+| une seule écurie | 29.9 | 23.1 | 122 |
+| un seul circuit | 30.5 | 24.7 | 207 |
+| statut engagement_attached | 39.2 | 33.1 | 1259 |
+| statut pending_review (file de validation) | 28.3 | 21.7 | 87 |
+| shooting + statut combinés | 32.8 | 26.8 | 99 |
+| client + écurie + statut combinés | 30.3 | 24.3 | 0 |
+| plage ISO | 43.2 | 36.7 | 1560 |
+| plage focale | 42.0 | 35.9 | 823 |
+| plein texte, terme fréquent | 36.6 | 30.4 | 240 |
+| plein texte, exclusion | 40.4 | 34.2 | 90 |
+| rafales toutes (non groupées) | 50.0 | 43.6 | 7917 |
+| plage de dates | 67.6 | 59.3 | 1912 |
+| page 2 (curseur) | 38.4 | 31.6 | 1912 |
+| grande page (limite haute) | 36.4 | 30.1 | 1912 |
+| shooting inexistant (ensemble vide) | 18.1 | 13.0 | 0 |
+| combinaison la plus large | 27.8 | 22.8 | 0 |
 
 ## Méthode
 

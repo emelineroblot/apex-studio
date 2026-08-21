@@ -63,6 +63,10 @@ def search(
     date_from: str | None = None,
     date_to: str | None = None,
     status: list[str] | None = Query(default=None),
+    # Revue J2 (🟠 n°1, §3-N.1 du plan) — origine du média, colonne projetée dans
+    # `media_search` mais jusqu'ici invisible du contrat. Absent/`None` = tous les médias,
+    # `false` = réels seulement, `true` = simulés seulement.
+    is_simulated: bool | None = Query(default=None),
     series: SeriesMode = "collapsed",
     sort: SortMode = "-shot_at",
     cursor: str | None = None,
@@ -85,6 +89,7 @@ def search(
         date_from=_parse_datetime(date_from, param="date_from"),
         date_to=_parse_datetime(date_to, param="date_to"),
         status=status,
+        is_simulated=is_simulated,
         series=series,
     )
     result = run_search(db, user, filters, sort=sort, cursor=cursor, limit=limit)
