@@ -126,6 +126,73 @@ export const UNATTACHED_REASONS = Object.keys(UNATTACHED_REASONS_EXHAUSTIVE) as 
 export type QuarantineDetail = Schemas["QuarantineDetail"];
 export type QuarantineDetailKey = keyof QuarantineDetail;
 
+// ── J2 — Recherche à facettes (§3-K) ─────────────────────────────────────────────────────
+export type FacetTerm = Schemas["FacetTerm"];
+export type FacetStatusTerm = Schemas["FacetStatusTerm"];
+export type FacetBucket = Schemas["FacetBucket"];
+export type Facets = Schemas["Facets"];
+export type SearchResponse = Schemas["SearchResponse"];
+export type SeriesMode = "collapsed" | "all";
+export type SortMode = "shot_at" | "-shot_at";
+
+// ── J2 — File de validation OCR (§3-J) ───────────────────────────────────────────────────
+export type ReviewMediaRef = Schemas["ReviewMediaRef"];
+export type SuggestedEngagement = Schemas["SuggestedEngagement"];
+export type ReviewItem = Schemas["ReviewItem"];
+export type ReviewQueueResponse = Schemas["ReviewQueueResponse"];
+export type ReviewDecision = Schemas["ReviewDecision"];
+export type ReviewDecisionsRequest = Schemas["ReviewDecisionsRequest"];
+export type ReviewDecisionError = Schemas["ReviewDecisionError"];
+export type ReviewDecisionsResponse = Schemas["ReviewDecisionsResponse"];
+/** `ReviewDecision.action` — vrai enum OpenAPI, 3 valeurs. */
+export type ReviewAction = ReviewDecision["action"];
+
+export type OcrCandidateOut = Schemas["OcrCandidateOut"];
+export type MediaOcrResponse = Schemas["MediaOcrResponse"];
+/**
+ * `OcrCandidateOut.resolution` — vrai enum OpenAPI (6 valeurs). `Record<OcrResolution,
+ * string>` (`lib/labels.ts`) exhaustif au sens du compilateur, même garde-fou que
+ * `QuarantineReason` ci-dessus (§ pièges projet — dictionnaires dérivés du contrat).
+ */
+export type OcrResolution = OcrCandidateOut["resolution"];
+const OCR_RESOLUTIONS_EXHAUSTIVE = {
+  auto: true,
+  review: true,
+  abstain: true,
+  not_engaged: true,
+  accepted: true,
+  rejected: true,
+} satisfies Record<OcrResolution, true>;
+export const OCR_RESOLUTIONS = Object.keys(OCR_RESOLUTIONS_EXHAUSTIVE) as OcrResolution[];
+
+/** `MediaEngagementOut.source` — vrai enum OpenAPI, 2 valeurs. */
+export type MediaEngagementSource = MediaEngagementOut["source"];
+
+// ── J2 — Réglages OCR (§3-J.2) ───────────────────────────────────────────────────────────
+export type OcrDistribution = Schemas["OcrDistribution"];
+export type OcrPreviewDistribution = Schemas["OcrPreviewDistribution"];
+export type OcrSettingsOut = Schemas["OcrSettingsOut"];
+export type OcrSettingsUpdate = Schemas["OcrSettingsUpdate"];
+export type OcrSettingsUpdateResponse = Schemas["OcrSettingsUpdateResponse"];
+
+// ── J2 — Collections ──────────────────────────────────────────────────────────────────────
+export type CollectionItemOut = Schemas["CollectionItemOut"];
+export type CollectionOut = Schemas["CollectionOut"];
+export type CollectionCreate = Schemas["CollectionCreate"];
+export type CollectionAddItemsRequest = Schemas["CollectionAddItemsRequest"];
+export type CollectionAddItemsResponse = Schemas["CollectionAddItemsResponse"];
+/** `CollectionOut.status` — vrai enum OpenAPI, 3 valeurs. */
+export type CollectionStatus = CollectionOut["status"];
+const COLLECTION_STATUSES_EXHAUSTIVE = {
+  draft: true,
+  published: true,
+  closed: true,
+} satisfies Record<CollectionStatus, true>;
+export const COLLECTION_STATUSES = Object.keys(COLLECTION_STATUSES_EXHAUSTIVE) as CollectionStatus[];
+
+// ── J2 — Indicateur de rattachement automatique ──────────────────────────────────────────
+export type AutoAttachRate = Schemas["AutoAttachRate"];
+
 /**
  * `QuarantineCard.DETAIL_LABELS` est typé `Record<QuarantineDetailKey, string>` : une clé
  * retirée d'ici (donc du contrat) sans être retirée de `DETAIL_LABELS` est une erreur de

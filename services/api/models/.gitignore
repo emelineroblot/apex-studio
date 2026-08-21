@@ -1,0 +1,3 @@
+# Poids ONNX du moteur OCR — matérialisés par `uv run python -m apex.cli fetch-models`.
+# Jamais versionnés (~15 Mo, ils voyagent avec la roue `rapidocr-onnxruntime`).
+*.onnx

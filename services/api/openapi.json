@@ -2117,6 +2117,7 @@
           "media"
         ],
         "summary": "Candidats OCR bruts du média (J2) — score et boîte, affichés dans l'UI",
+        "description": "Les candidats **bruts**, tels que persistés : c'est la matière première du jalon.\n\nCe que le modèle a lu, avec quelle confiance et à quel endroit de l'image, est visible\ndans l'UI — pas seulement la conclusion. C'est ce qui rend le score explicable et ce\nqui permet de rejouer une classification sans jamais relancer une inférence.",
         "operationId": "get_media_ocr_api_v1_media__media_id__ocr_get",
         "security": [
           {

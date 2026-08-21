@@ -24,6 +24,7 @@ import typer
 # pour l'instant, mais l'import doit rester en place pour que les lots suivants n'aient
 # rien d'autre à faire que d'ajouter leur module sous `apex/queue/handlers/`.
 import apex.queue.handlers  # noqa: F401
+from apex.config import settings
 from apex.db import SessionLocal
 from apex.queue.runner import DEFAULT_BATCH_SIZE, drain
 
@@ -90,6 +91,32 @@ def worker(
                 time.sleep(IDLE_SLEEP_SECONDS)
     except KeyboardInterrupt:
         typer.echo(f"[{worker_id}] arrêt demandé.")
+
+
+@app.command("fetch-models")
+def fetch_models(
+    destination: str = typer.Option(
+        None,
+        "--dest",
+        help="Répertoire cible (défaut : OCR_MODEL_DIR, cf. .env).",
+    ),
+) -> None:
+    """Matérialise les poids ONNX du moteur OCR dans `OCR_MODEL_DIR` (§3-J.1).
+
+    **Aucun téléchargement** : les poids voyagent avec la roue `rapidocr-onnxruntime`
+    installée par `uv sync`. Cette commande ne fait que les recopier, pour un déploiement
+    qui préfère les servir depuis un répertoire à lui. L'invariant du projet — « aucune
+    intégration tierce, la démo ne doit pas pouvoir tomber à cause d'un service externe » —
+    interdit une récupération réseau, même au build.
+    """
+    from apex.pipeline.ocr.engine import copy_bundled_models
+
+    target = destination or settings.ocr_model_dir
+    copied = copy_bundled_models(target)
+    if not copied:
+        typer.echo(f"Aucun poids trouvé à recopier vers {target}.")
+        raise typer.Exit(code=1)
+    typer.echo(f"{len(copied)} poids copiés vers {target} : {', '.join(copied)}")
 
 
 def main() -> None:

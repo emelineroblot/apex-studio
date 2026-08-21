@@ -5,7 +5,10 @@
 import type {
   AttachmentStatus,
   ClientKind,
+  CollectionStatus,
   IngestStatus,
+  MediaEngagementSource,
+  OcrResolution,
   QuarantineReason,
   Role,
   ShootingStatus,
@@ -103,4 +106,32 @@ export const CLIENT_KIND_LABELS: Record<ClientKind, string> = {
   team: "Écurie / team",
   driver: "Pilote indépendant",
   sponsor: "Sponsor",
+};
+
+/**
+ * `OcrCandidateOut.resolution` (J2, §3-J.3) — vrai enum OpenAPI, `Record<OcrResolution,
+ * string>` exhaustif (même garde-fou de compilation que `QUARANTINE_REASON_LABELS`).
+ * `auto`/`review`/`abstain`/`not_engaged` sont les issues du classement automatique ;
+ * `accepted`/`rejected` sont les décisions humaines appliquées depuis `/review`.
+ */
+export const OCR_RESOLUTION_LABELS: Record<OcrResolution, string> = {
+  auto: "Rattaché automatiquement",
+  review: "En file de validation",
+  abstain: "Confiance trop faible — abstention",
+  not_engaged: "Numéro incohérent — absent des engagements",
+  accepted: "Validé manuellement",
+  rejected: "Rejeté manuellement",
+};
+
+/** `CollectionOut.status` — vrai enum OpenAPI, `Record<CollectionStatus, string>` exhaustif. */
+export const COLLECTION_STATUS_LABELS: Record<CollectionStatus, string> = {
+  draft: "Brouillon",
+  published: "Publiée",
+  closed: "Clôturée",
+};
+
+/** `MediaEngagementOut.source` — vrai enum OpenAPI, `Record<MediaEngagementSource, string>`. */
+export const MEDIA_ENGAGEMENT_SOURCE_LABELS: Record<MediaEngagementSource, string> = {
+  ocr: "Lecture OCR",
+  human: "Rattachement manuel",
 };

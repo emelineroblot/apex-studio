@@ -61,6 +61,23 @@ def handle_ingest_media(ctx: JobContext) -> dict[str, Any]:
         priority=120,
     )
 
+    # §3-F.1, étape 9 (J2) : l'OCR a son propre job — plus coûteux, il échoue différemment
+    # et doit rester relançable seul. On ne l'enqueue que si le média a rejoint un
+    # shooting : sans table d'engagements, un numéro lu ne serait ni rattachable ni
+    # déclarable incohérent (voir `handlers/ocr_media.py`).
+    if (
+        outcome.ingest_status == "ingested"
+        and outcome.duplicate_of_media_id is None
+        and media.shooting_id is not None
+    ):
+        enqueue(
+            ctx.session,
+            "ocr_media",
+            {"media_id": media.id},
+            dedupe_key=f"ocr:{media.id}",
+            priority=110,
+        )
+
     return {
         "media_id": outcome.media_id,
         "ingest_status": outcome.ingest_status,

@@ -9,12 +9,17 @@ export type NavItem = {
 };
 
 export const NAV_ITEMS: NavItem[] = [
+  { href: "/dashboard", label: "Tableau de bord", roles: ["owner", "photographer"] },
   { href: "/shootings", label: "Shootings", roles: ["owner", "photographer"] },
   { href: "/upload", label: "Dépôt de photos", roles: ["owner", "photographer"] },
   { href: "/library", label: "Bibliothèque", roles: ["owner", "photographer"] },
+  { href: "/search", label: "Recherche", roles: ["owner", "photographer"] },
+  { href: "/review", label: "File de validation", roles: ["owner", "photographer"] },
+  { href: "/collections", label: "Collections", roles: ["owner", "photographer"] },
   { href: "/clients", label: "Clients", roles: ["owner", "photographer"] },
   { href: "/circuits", label: "Circuits", roles: ["owner", "photographer"] },
   { href: "/drivers", label: "Pilotes", roles: ["owner", "photographer"] },
   { href: "/teams", label: "Écuries", roles: ["owner", "photographer"] },
   { href: "/cameras", label: "Boîtiers", roles: ["owner"] },
+  { href: "/settings/ocr", label: "Seuils OCR", roles: ["owner"] },
 ];

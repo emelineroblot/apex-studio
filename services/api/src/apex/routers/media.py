@@ -9,12 +9,14 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from apex.db import get_db
 from apex.models.media import Media, MediaEngagement, MediaSeries, PipelineEvent
+from apex.models.search import MediaOcrCandidate
 from apex.models.shooting import Engagement
-from apex.routers._common import not_implemented
+from apex.pipeline.ocr import classify
 from apex.schemas.common import Page
 from apex.schemas.media import (
     AttachmentDetail,
@@ -26,9 +28,10 @@ from apex.schemas.media import (
     MediaSummary,
     QuarantineDetail,
 )
-from apex.schemas.review import MediaOcrResponse
+from apex.schemas.review import MediaOcrResponse, OcrCandidateOut
 from apex.security import CurrentUser
 from apex.services import access
+from apex.services.ocr_settings import load_ocr_settings
 from apex.services.pagination import paginate_by_id
 from apex.services.storage import ObjectNotFoundError, get_storage_client
 
@@ -321,6 +324,25 @@ def attach_media(
     return _media_out(db, media)
 
 
+def _engagement_of_media_or_404(db: Session, media: Media, engagement_id: int) -> Engagement:
+    """Un engagement n'existe que **pour un shooting donné** (invariant `AGENTS.md`).
+
+    Rattacher un média à un engagement d'un autre événement n'aurait aucun sens métier :
+    le n°12 de ce week-end-là n'est pas le n°12 du week-end suivant.
+    """
+    engagement = db.get(Engagement, engagement_id)
+    if engagement is None or engagement.shooting_id != media.shooting_id:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "not_found",
+                "message": "Engagement introuvable pour le shooting de ce média.",
+                "detail": None,
+            },
+        )
+    return engagement
+
+
 @router.post(
     "/{media_id}/engagements",
     response_model=MediaEngagementOut,
@@ -328,9 +350,46 @@ def attach_media(
     summary="Rattachement manuel à un engagement (J2, `source='human'`)",
 )
 def add_media_engagement(
-    media_id: int, payload: MediaEngagementAttachRequest, user: CurrentUser
+    media_id: int,
+    payload: MediaEngagementAttachRequest,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
 ) -> MediaEngagementOut:
-    not_implemented("POST /media/{id}/engagements")
+    media = access.get_visible_media_or_404(db, user, media_id)
+    if media.shooting_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "media_not_attached",
+                "message": "Ce média n'est rattaché à aucun shooting : aucun engagement applicable.",
+                "detail": None,
+            },
+        )
+    access.assert_can_write_engagements(db, user, media.shooting_id)
+    engagement = _engagement_of_media_or_404(db, media, payload.engagement_id)
+
+    # Un média peut porter **plusieurs** rattachements (deux voitures dans le cadre) : la
+    # clé primaire composite l'autorise, `ON CONFLICT DO NOTHING` rend l'appel idempotent.
+    db.execute(
+        pg_insert(MediaEngagement)
+        .values(
+            media_id=media.id,
+            engagement_id=engagement.id,
+            source="human",
+            confidence=None,
+            created_by=user.id,
+        )
+        .on_conflict_do_nothing(index_elements=["media_id", "engagement_id"])
+    )
+    media.attachment_status = "engagement_attached"
+    media.attachment_source = "human"
+    db.commit()
+    return MediaEngagementOut(
+        engagement_id=engagement.id,
+        car_number=engagement.car_number,
+        source="human",
+        confidence=None,
+    )
 
 
 @router.delete(
@@ -338,8 +397,41 @@ def add_media_engagement(
     status_code=204,
     summary="Retirer un rattachement (J2)",
 )
-def delete_media_engagement(media_id: int, engagement_id: int, user: CurrentUser) -> None:
-    not_implemented("DELETE /media/{id}/engagements/{engagement_id}")
+def delete_media_engagement(
+    media_id: int, engagement_id: int, user: CurrentUser, db: Session = Depends(get_db)
+) -> None:
+    media = access.get_visible_media_or_404(db, user, media_id)
+    if media.shooting_id is not None:
+        access.assert_can_write_engagements(db, user, media.shooting_id)
+    link = db.get(MediaEngagement, (media_id, engagement_id))
+    if link is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "not_found",
+                "message": "Rattachement introuvable.",
+                "detail": None,
+            },
+        )
+    db.delete(link)
+    db.flush()
+
+    # Retirer un rattachement ne « détache » pas arbitrairement le média : on rejoue la
+    # projection déterministe, qui recalcule `attachment_status` à partir des candidats et
+    # des rattachements restants. Un candidat déjà arbitré reste arbitré — retirer le
+    # rattachement ne réécrit pas la décision humaine, seulement son effet.
+    classify.project_media(db, media, load_ocr_settings(db))
+
+    # Repli pour un média sans aucun candidat OCR (rattachement 100 % manuel) : la
+    # projection est alors un no-op délibéré, personne ne recalcule son état.
+    still_linked = db.execute(
+        select(MediaEngagement.media_id).where(MediaEngagement.media_id == media_id).limit(1)
+    ).first()
+    if not still_linked and media.attachment_status == "engagement_attached":
+        media.attachment_status = (
+            "shooting_attached" if media.shooting_id is not None else "unattached"
+        )
+    db.commit()
 
 
 @router.get(
@@ -347,5 +439,33 @@ def delete_media_engagement(media_id: int, engagement_id: int, user: CurrentUser
     response_model=MediaOcrResponse,
     summary="Candidats OCR bruts du média (J2) — score et boîte, affichés dans l'UI",
 )
-def get_media_ocr(media_id: int, user: CurrentUser) -> MediaOcrResponse:
-    not_implemented("GET /media/{id}/ocr")
+def get_media_ocr(
+    media_id: int, user: CurrentUser, db: Session = Depends(get_db)
+) -> MediaOcrResponse:
+    """Les candidats **bruts**, tels que persistés : c'est la matière première du jalon.
+
+    Ce que le modèle a lu, avec quelle confiance et à quel endroit de l'image, est visible
+    dans l'UI — pas seulement la conclusion. C'est ce qui rend le score explicable et ce
+    qui permet de rejouer une classification sans jamais relancer une inférence.
+    """
+    media = access.get_visible_media_or_404(db, user, media_id)
+    candidates = db.execute(
+        select(MediaOcrCandidate)
+        .where(MediaOcrCandidate.media_id == media.id)
+        .order_by(MediaOcrCandidate.confidence.desc(), MediaOcrCandidate.id)
+    ).scalars()
+    return MediaOcrResponse(
+        candidates=[
+            OcrCandidateOut(
+                id=candidate.id,
+                raw_text=candidate.raw_text,
+                normalized_number=candidate.normalized_number,
+                confidence=float(candidate.confidence),
+                bbox=candidate.bbox,
+                engine_version=candidate.engine_version,
+                resolution=candidate.resolution,
+                engagement_id=candidate.engagement_id,
+            )
+            for candidate in candidates
+        ]
+    )

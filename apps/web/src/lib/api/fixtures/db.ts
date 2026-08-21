@@ -10,11 +10,14 @@ import type {
   CameraOut,
   ClientOut,
   CircuitOut,
+  CollectionOut,
   DemoAccount,
   DriverOut,
   EngagementOut,
   MediaOut,
   MediaSummary,
+  OcrCandidateOut,
+  OcrSettingsOut,
   ShootingOut,
   TeamOut,
   UserOut,
@@ -426,6 +429,73 @@ function buildMedia(): MediaFixture[] {
   });
   id += 1;
 
+  // ── J2 — File de validation OCR (§3-J.3) ────────────────────────────────────────────
+  // Déjà rattachées au shooting par la fenêtre temporelle (`pipeline_time`), en attente du
+  // recoupement OCR humain — `attachment_status='pending_review'`, aucun engagement encore
+  // écrit. Numéro lu « 27 » : existe dans la table des engagements du shooting 1
+  // (engagement #2) mais confiance entre les deux seuils → suggestion, pas rattachement.
+  push({
+    id,
+    shooting_id: 1,
+    shot_at_exif: "2026-06-13T10:40:00",
+    shot_at: "2026-06-13T10:40:00Z",
+    attachment_status: "pending_review",
+    attachment_source: "pipeline_time",
+    attachment_detail: null,
+    engagements: [],
+    exif: {
+      camera_id: 1,
+      lens_model: "RF 100-500mm F4.5-7.1L",
+      iso: 800,
+      shutter_speed_sec: 0.0005,
+      shutter_speed_label: "1/2000",
+      aperture: 5.6,
+      focal_length: 320,
+      gps_lat: null,
+      gps_lon: null,
+      exif_raw: null,
+    },
+  });
+  id += 1;
+  // Deuxième cas « pas sûr » : numéro lu « 5 » (engagement #3), confiance encore plus faible.
+  push({
+    id,
+    shooting_id: 1,
+    shot_at_exif: "2026-06-13T11:05:00",
+    shot_at: "2026-06-13T11:05:00Z",
+    attachment_status: "pending_review",
+    attachment_source: "pipeline_time",
+    attachment_detail: null,
+    engagements: [],
+  });
+  id += 1;
+  // Cas « sûr mais incohérent » : numéro lu avec une confiance élevée mais absent de la
+  // table des engagements du shooting (« 91 » n'existe pas parmi 12/27/5/44) — jamais
+  // rattaché de force (§3-J.3, critère d'acceptation explicite).
+  push({
+    id,
+    shooting_id: 1,
+    shot_at_exif: "2026-06-13T11:20:00",
+    shot_at: "2026-06-13T11:20:00Z",
+    attachment_status: "inconsistent",
+    attachment_source: "pipeline_time",
+    attachment_detail: null,
+    engagements: [],
+  });
+  id += 1;
+  // Deuxième incohérence, shooting 2 cette fois (numéro « 71 », absent de 5/9).
+  push({
+    id,
+    shooting_id: 2,
+    shot_at_exif: "2026-07-04T09:15:00",
+    shot_at: "2026-07-04T09:15:00Z",
+    attachment_status: "inconsistent",
+    attachment_source: "pipeline_time",
+    attachment_detail: null,
+    engagements: [],
+  });
+  id += 1;
+
   return list;
 }
 
@@ -463,4 +533,124 @@ export function toSummary(item: MediaOut): MediaSummary {
     series_member_count: item.series_id != null ? seriesMemberCount(item.series_id) : null,
   };
 }
+
+/**
+ * ── J2 — Réglages OCR (§3-J.2) ────────────────────────────────────────────────────────
+ * État mutable (`PUT /settings/ocr` le modifie en place, § `fixtures/settings.ts`) —
+ * valeurs par défaut alignées sur `apex/demo/seed.py` (`ocr_high=0.80`, `ocr_low=0.45`).
+ */
+export const ocrSettings: OcrSettingsOut = {
+  high: 0.8,
+  low: 0.45,
+  min_box_area_ratio: 0.0005,
+  max_box_area_ratio: 0.08,
+  engine_version: "rapidocr-ppocr-v4-sim",
+  updated_at: "2026-08-01T09:00:00Z",
+  distribution: { auto: 0, review: 0, abstain: 0, not_engaged: 0 },
+};
+
+export type OcrCandidateFixture = OcrCandidateOut & { media_id: number };
+
+/**
+ * Candidats bruts persistés (§3-J.4 : « changer les seuils redistribue les cas, sans
+ * relancer l'OCR ») — un candidat par média de la file de validation ci-dessus
+ * (`buildMedia`, section « J2 »), plus quelques candidats déjà résolus (`accepted`/
+ * `rejected`) pour peupler l'historique visible sur `GET /media/{id}/ocr`. `bbox` est une
+ * hypothèse frontend documentée dans `implementation.md` (§ Contrat non fermé côté
+ * backend : `Bbox` = `additionalProperties: true`) : coordonnées **normalisées** `[0..1]`
+ * relatives à l'aperçu affiché, pas des pixels absolus.
+ */
+export const ocrCandidates: OcrCandidateFixture[] = [
+  {
+    id: 1,
+    media_id: 15,
+    raw_text: "Z7",
+    normalized_number: "27",
+    confidence: 0.62,
+    bbox: { x: 0.42, y: 0.55, width: 0.16, height: 0.09 },
+    engine_version: "rapidocr-ppocr-v4-sim",
+    resolution: "review",
+    engagement_id: 2,
+  },
+  {
+    id: 2,
+    media_id: 16,
+    raw_text: "S",
+    normalized_number: "5",
+    confidence: 0.51,
+    bbox: { x: 0.38, y: 0.6, width: 0.1, height: 0.08 },
+    engine_version: "rapidocr-ppocr-v4-sim",
+    resolution: "review",
+    engagement_id: 3,
+  },
+  {
+    id: 3,
+    media_id: 17,
+    raw_text: "91",
+    normalized_number: "91",
+    confidence: 0.93,
+    bbox: { x: 0.4, y: 0.52, width: 0.18, height: 0.1 },
+    engine_version: "rapidocr-ppocr-v4-sim",
+    resolution: "not_engaged",
+    engagement_id: null,
+  },
+  {
+    id: 4,
+    media_id: 18,
+    raw_text: "71",
+    normalized_number: "71",
+    confidence: 0.88,
+    bbox: { x: 0.35, y: 0.48, width: 0.17, height: 0.1 },
+    engine_version: "rapidocr-ppocr-v4-sim",
+    resolution: "not_engaged",
+    engagement_id: null,
+  },
+  // Historique — déjà tranché par un humain avant l'ouverture de la démo, illustre
+  // `GET /media/{id}/ocr` sur une fiche média déjà rattachée.
+  {
+    id: 5,
+    media_id: 6,
+    raw_text: "5",
+    normalized_number: "5",
+    confidence: 0.91,
+    bbox: { x: 0.44, y: 0.5, width: 0.14, height: 0.09 },
+    engine_version: "rapidocr-ppocr-v4-sim",
+    resolution: "auto",
+    engagement_id: 3,
+  },
+];
+
+/**
+ * ── J2 — Collections ──────────────────────────────────────────────────────────────────
+ * `items` porte les `media_id` dans l'ordre de composition (`position`), symétrique au
+ * contrat (`CollectionItemOut`). Une collection publiée pour donner une démo J3 non vide.
+ */
+export const collections: CollectionOut[] = [
+  {
+    id: 1,
+    client_id: 1,
+    shooting_id: 1,
+    title: "Sélection Roquebrune 6h — voiture #12",
+    description: "Meilleurs plans de la rafale principale, à confirmer avec l'écurie.",
+    status: "published",
+    published_at: "2026-06-14T08:00:00Z",
+    created_by: 1,
+    items: [
+      { media_id: 1, position: 0 },
+      { media_id: 2, position: 1 },
+      { media_id: 6, position: 2 },
+    ],
+  },
+  {
+    id: 2,
+    client_id: 2,
+    shooting_id: 2,
+    title: "Brouillon — championnat régional GT",
+    description: null,
+    status: "draft",
+    published_at: null,
+    created_by: 1,
+    items: [],
+  },
+];
 
