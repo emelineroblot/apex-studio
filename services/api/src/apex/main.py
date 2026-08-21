@@ -5,6 +5,7 @@ Vercel). CORS restreint à l'origine du frontend (Décision A : pas de cookie, J
 en-tête `Authorization`, donc pas de `credentials` à gérer).
 """
 
+import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -127,16 +128,37 @@ app.include_router(public.router, prefix=f"{API_PREFIX}/public")
 
 @app.on_event("startup")
 def _bootstrap_demo_users() -> None:
-    """Garantit l'existence des 2 comptes de démo (§3-I) — idempotent, base réelle."""
-    db = SessionLocal()
+    """Garantit l'existence des 2 comptes de démo (§3-I) — idempotent, base réelle.
+
+    **N'empêche jamais le démarrage.** Cette fonction levait, et l'application entière
+    refusait alors de se lancer : une indisponibilité passagère de la base — le pooler
+    Supabase à court de connexions, constaté en production — rendait l'API totalement
+    morte, `GET /health` compris. Or `/health` est précisément l'endpoint censé dire *ce
+    qui* ne va pas ; le voir tomber avec le reste supprime le seul moyen de diagnostiquer.
+
+    L'échec est donc consigné et le démarrage se poursuit : les routes qui n'ont pas besoin
+    de la base répondent, `/health` annonce `db: down`, et la tentative suivante recréera
+    les comptes — l'opération est idempotente.
+    """
+    db = None
     try:
+        # `SessionLocal()` est dans le `try` : la création de session peut échouer elle
+        # aussi (pool épuisé, moteur mal configuré), et un hook de démarrage qui prétend
+        # ne jamais lever doit couvrir tout ce qu'il fait, pas seulement sa partie facile.
+        db = SessionLocal()
         ensure_demo_users(db)
         db.commit()
     except Exception:
-        db.rollback()
-        raise
+        if db is not None:
+            db.rollback()
+        logging.getLogger(__name__).warning(
+            "Comptes de démonstration non initialisés au démarrage — "
+            "la base est injoignable, nouvelle tentative au prochain démarrage.",
+            exc_info=True,
+        )
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 @app.get("/api/v1/health", tags=["health"], summary="Vérification de disponibilité")

@@ -22,12 +22,34 @@ export default function LoginPage() {
 
   const [accounts, setAccounts] = useState<DemoAccount[] | null>(null);
   const [accountsError, setAccountsError] = useState(false);
+  const [retry, setRetry] = useState(0);
 
+  // Une seule tentative condamnait l'écran : au réveil de l'hébergement, la toute
+  // première requête peut échouer le temps que la base réponde, et le visiteur n'avait
+  // plus que la saisie manuelle d'identifiants qu'il ne connaît pas. Trois essais espacés
+  // couvrent un démarrage à froid sans jamais faire attendre quand tout va bien.
   useEffect(() => {
-    fetchDemoAccounts()
-      .then(setAccounts)
-      .catch(() => setAccountsError(true));
-  }, []);
+    let cancelled = false;
+
+    async function load(attempt = 0): Promise<void> {
+      try {
+        const fetched = await fetchDemoAccounts();
+        if (!cancelled) setAccounts(fetched);
+      } catch {
+        if (cancelled) return;
+        if (attempt < 2) {
+          setTimeout(() => void load(attempt + 1), 1200 * (attempt + 1));
+          return;
+        }
+        setAccountsError(true);
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [retry]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -79,8 +101,18 @@ export default function LoginPage() {
           </div>
         </div>
       ) : accountsError ? (
-        <Notice tone="warn" >
-          Comptes de démonstration indisponibles pour le moment — saisissez vos identifiants manuellement.
+        <Notice tone="warn">
+          <p>Les comptes de démonstration n&apos;ont pas pu être chargés.</p>
+          <button
+            type="button"
+            onClick={() => {
+              setAccountsError(false);
+              setRetry((value) => value + 1);
+            }}
+            className="mt-1 font-medium underline hover:no-underline"
+          >
+            Réessayer
+          </button>
         </Notice>
       ) : null}
 

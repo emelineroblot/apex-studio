@@ -28,10 +28,18 @@ if settings.is_remote:
 #: prix d'un aller-retour perdu sur la première requête d'un réveil.
 _POOL_RECYCLE_SECONDS = 280
 
+#: Le pooler Supabase plafonne à **200 connexions clients pour tout le projet**, partagées
+#: entre les fonctions Vercel, le worker lancé depuis un poste et le moindre `psql`. Chaque
+#: instance de fonction gardait jusqu'à 2+3 connexions : quelques instances concurrentes et
+#: un worker suffisaient à saturer — constaté en production (`EMAXCONN`), l'application
+#: refusant alors de démarrer. Un pool minuscule par processus est la seule discipline qui
+#: tienne quand on ne contrôle pas le nombre de processus.
+_POOL_SIZE, _MAX_OVERFLOW = (1, 2) if settings.is_remote else (2, 3)
+
 engine = create_engine(
     settings.database_url,
-    pool_size=2,
-    max_overflow=3,
+    pool_size=_POOL_SIZE,
+    max_overflow=_MAX_OVERFLOW,
     pool_pre_ping=True,
     pool_recycle=_POOL_RECYCLE_SECONDS,
     connect_args=_CONNECT_ARGS,
@@ -49,8 +57,29 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 # de connexions du pooler Supabase (dette documentée, `AGENTS.md`) reste à surveiller au premier
 # déploiement, mais un heartbeat est bref (un `UPDATE` d'une ligne) et peu fréquent par
 # rapport au trafic applicatif.
-heartbeat_engine = create_engine(
-    settings.database_url, poolclass=NullPool, connect_args=_CONNECT_ARGS, future=True
+# `NullPool` en local : chaque heartbeat ouvre puis referme sa connexion, ce qui est le
+# comportement le plus simple et le plus sûr face à une base locale.
+#
+# **Jamais en distant.** Le worker rafraîchit le heartbeat avant *chaque* job : sur trois
+# cents jobs, `NullPool` ouvre trois cents connexions physiques successives vers le pooler,
+# qui les compte toutes tant qu'il ne les a pas recyclées. C'est ce qui a contribué à
+# atteindre la limite de 200 en production. Un pool dédié minuscule garde la propriété
+# recherchée à l'origine — ne jamais disputer les connexions du pool applicatif (revue J2,
+# 🔴 n°2) — sans ouvrir une connexion par battement.
+heartbeat_engine = (
+    create_engine(
+        settings.database_url,
+        pool_size=1,
+        max_overflow=1,
+        pool_pre_ping=True,
+        pool_recycle=_POOL_RECYCLE_SECONDS,
+        connect_args=_CONNECT_ARGS,
+        future=True,
+    )
+    if settings.is_remote
+    else create_engine(
+        settings.database_url, poolclass=NullPool, connect_args=_CONNECT_ARGS, future=True
+    )
 )
 
 

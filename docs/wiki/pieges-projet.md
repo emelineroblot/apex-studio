@@ -172,6 +172,36 @@ projet de la même stack vivent dans la skill globale `stack-pitfalls`, pas ici.
   un cas nominal ; et surtout : **un garde-fou doit être rejoué après le changement qu'il est
   censé garder**, il fait partie du périmètre de ce changement, pas de son décor. *(2026-08-21)*
 
+- **Le pooler Supabase plafonne à 200 connexions clients pour tout le projet**, partagées
+  entre les fonctions Vercel, le worker lancé depuis un poste et le moindre `psql`. Atteint
+  en production (`FATAL: (EMAXCONN) max client connections reached, limit: 200`) pendant
+  qu'un worker traitait trois cents jobs : chaque instance de fonction gardait jusqu'à cinq
+  connexions, et `heartbeat_engine` en `NullPool` en ouvrait une **par battement**, soit une
+  par job. Pools réduits à 1+2 en distant, et le moteur de heartbeat y prend un pool dédié
+  minuscule au lieu de `NullPool` — il garde la propriété qui l'avait fait naître (ne jamais
+  disputer le pool applicatif) sans ouvrir une connexion par battement. *(2026-08-22)*
+
+- **Un hook `on_event("startup")` qui lève empêche toute l'application de démarrer**, `GET
+  /health` compris — c'est-à-dire précisément l'endpoint censé dire *ce qui* ne va pas.
+  `_bootstrap_demo_users` levait sur une base momentanément injoignable : l'API répondait
+  `500` sur **toutes** ses routes au lieu d'être simplement dégradée. Un bootstrap optionnel
+  consigne son échec et laisse démarrer ; il est idempotent, la tentative suivante fera le
+  travail. Et le `try` couvre aussi la création de session, pas seulement son usage.
+  *(2026-08-22)*
+
+- **Un écran qui charge des données au montage doit pouvoir réessayer.** L'écran de
+  connexion tentait une fois de lire les comptes de démonstration : au réveil de
+  l'hébergement, cette première requête échouait et le visiteur n'avait plus qu'une saisie
+  manuelle d'identifiants qu'il ne connaît pas. Trois essais espacés, plus un bouton
+  « Réessayer » — la panne d'un instant ne condamne plus l'écran jusqu'au rechargement.
+  *(2026-08-22)*
+
+- **Un script de vérification joué deux fois sur le même environnement ne doit pas
+  supposer un état vierge.** `verify_j3_flow.py` prenait « la première facture venue » :
+  au second passage, c'était celle du premier — déjà émise, donc numérotée — et la
+  vérification « une facture brouillon n'a pas de numéro » échouait sur une facture qui
+  n'était pas la sienne. Il cible désormais la collection qu'il vient de créer. *(2026-08-22)*
+
 - **Un motif de dossier non ancré dans `.vercelignore` s'applique à toute profondeur.**
   `models/`, écrit pour exclure les poids OCR (`OCR_MODEL_DIR=./models`), a aussi supprimé
   `src/apex/models/` du téléversement : l'application a démarré en production sur

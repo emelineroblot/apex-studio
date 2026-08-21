@@ -205,10 +205,15 @@ if status == 200:
 
 print("== Facturation ==")
 status, invoices = call("GET", "/invoices", token=owner)
-check("facture brouillon creee", status == 200 and bool(invoices.get("items")), invoices)
-if not invoices.get("items"):
-    raise SystemExit("Aucune facture : la suite du parcours ne peut pas etre verifiee.")
-invoice = invoices["items"][0]
+# Sur un environnement deja utilise, la liste contient les factures des passages
+# precedents — dont des factures emises. Prendre la premiere venue faisait echouer la
+# verification « une facture brouillon n'a pas de numero » sur une facture qui n'etait pas
+# la sienne. On cible celle de la collection creee par ce parcours.
+mine = [i for i in invoices.get("items", []) if i["collection_id"] == collection_id]
+check("facture brouillon creee", status == 200 and bool(mine), invoices)
+if not mine:
+    raise SystemExit("Aucune facture pour cette collection : parcours interrompu.")
+invoice = mine[0]
 check(
     "la facture porte les photos choisies",
     invoice["lines"] and invoice["lines"][0]["quantity"] == len(chosen),

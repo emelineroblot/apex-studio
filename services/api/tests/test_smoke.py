@@ -55,3 +55,21 @@ def test_health_degrade_quand_le_stockage_repond_plus(client: TestClient, monkey
     # La base, elle, reste joignable : le diagnostic doit rester lisible dépendance par
     # dépendance, jamais réduit à un seul drapeau.
     assert body["db"] == "ok"
+
+
+def test_le_demarrage_survit_a_une_base_injoignable(monkeypatch) -> None:
+    """Un bootstrap optionnel ne doit jamais empêcher l'application de démarrer.
+
+    Le hook levait, et l'API entière refusait de se lancer dès que la base hoquetait —
+    `GET /health` compris, c'est-à-dire l'endpoint censé dire *ce qui* ne va pas. Constaté
+    en production : le pooler à court de connexions rendait l'application totalement
+    muette au lieu de dégradée.
+    """
+    import apex.main
+
+    def _sessions_en_panne() -> None:
+        raise RuntimeError("pooler injoignable")
+
+    monkeypatch.setattr(apex.main, "SessionLocal", _sessions_en_panne)
+    # Ne lève pas : l'échec est consigné, le démarrage se poursuit.
+    apex.main._bootstrap_demo_users()
