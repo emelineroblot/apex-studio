@@ -12,6 +12,21 @@ import type { AutoAttachRate } from "@/lib/api/types";
 import { media } from "@/lib/api/fixtures/db";
 import { delay } from "@/lib/api/fixtures/utils";
 
+/**
+ * Cinq compteurs + taux pour une population donnée — même forme que la ligne de tête et que
+ * `real`/`simulated` (`AutoAttachRatePopulation`, revue J2 🟠1) : un seul composant de rendu
+ * (`OriginCard`, `dashboard/page.tsx`) s'applique aux trois populations sans transformation.
+ */
+function bucket(scoped: typeof media) {
+  const total = scoped.length;
+  const auto_time = scoped.filter((m) => m.attachment_source === "pipeline_time").length;
+  const auto_ocr = scoped.filter((m) => m.attachment_source === "pipeline_ocr").length;
+  const human = scoped.filter((m) => m.attachment_source === "human").length;
+  const unattached = scoped.filter((m) => m.attachment_source == null).length;
+  const rate = total > 0 ? (auto_time + auto_ocr) / total : 0;
+  return { total, auto_time, auto_ocr, human, unattached, rate };
+}
+
 export async function autoAttachRate(params: {
   shooting_id?: number | null;
   from?: string | null;
@@ -23,12 +38,9 @@ export async function autoAttachRate(params: {
   if (params.from) scoped = scoped.filter((m) => (m.shot_at ?? "") >= params.from!);
   if (params.to) scoped = scoped.filter((m) => (m.shot_at ?? "") <= params.to!);
 
-  const total = scoped.length;
-  const auto_time = scoped.filter((m) => m.attachment_source === "pipeline_time").length;
-  const auto_ocr = scoped.filter((m) => m.attachment_source === "pipeline_ocr").length;
-  const human = scoped.filter((m) => m.attachment_source === "human").length;
-  const unattached = scoped.filter((m) => m.attachment_source == null).length;
-  const rate = total > 0 ? (auto_time + auto_ocr) / total : 0;
-
-  return { total, auto_time, auto_ocr, human, unattached, rate };
+  return {
+    ...bucket(scoped),
+    real: bucket(scoped.filter((m) => !m.is_simulated)),
+    simulated: bucket(scoped.filter((m) => m.is_simulated)),
+  };
 }

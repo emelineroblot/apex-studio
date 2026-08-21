@@ -65,10 +65,22 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Régénère le jeu de démo (J2) — `owner` uniquement
-         * @description Enqueue `demo_reset` (§3-N.2) puis draine — même patron que `PUT /settings/ocr`
-         *     (§3-E.7) : la file reste l'unique chemin d'écriture, mais la démo veut un résultat
-         *     perceptible dès la réponse HTTP plutôt qu'une attente du prochain tick.
+         * Régénère le jeu de démo (J2) — secret serveur (`WORKER_SECRET`), pas un rôle
+         * @description Enqueue `demo_reset` (§3-N.2) puis répond immédiatement — la file reste l'unique
+         *     chemin d'écriture, un tick (`POST /jobs/tick`, `apex.cli worker --loop`) le draine.
+         *
+         *     **Revue J2 (🔴 n°3)** : cette route TRUNCATE 25 tables. `require_owner` (JWT) ne protège
+         *     rien ici puisque `GET /demo/accounts` est **public** et publie le mot de passe `owner`
+         *     en clair (design assumé — self-service de connexion pour la démo, §3-I) : trois appels
+         *     HTTP suffisaient à effacer la base en pleine démonstration. Découplé de l'identité du
+         *     déclencheur — même patron que `POST /jobs/tick` (`routers/jobs.py`) : un secret serveur
+         *     (`WORKER_SECRET`), jamais exposé au navigateur, jamais un JWT.
+         *
+         *     Le drainage synchrone dans la requête a également été retiré (même revue) : il exécutait
+         *     n'importe quel job déjà en file — y compris des inférences OCR — dans le budget de la
+         *     requête HTTP (60 s, alors que le pool ne compte que 2+3 connexions), rendant l'API
+         *     indisponible sous quelques appels concurrents. `DemoResetResponse` porte déjà `job_id` :
+         *     la redistribution est visible au prochain tick, jamais bloquante pour l'appelant.
          */
         post: operations["demo_seed_api_v1_demo_seed_post"];
         delete?: never;
@@ -1193,8 +1205,34 @@ export interface components {
             /** Candidate Shooting Ids */
             candidate_shooting_ids?: number[] | null;
         };
-        /** AutoAttachRate */
+        /**
+         * AutoAttachRate
+         * @description Champs de tête : agrégat **toutes origines confondues** (rétrocompatible avec la
+         *     forme d'origine du contrat). `real`/`simulated` (revue J2, 🟠 n°1, §3-N.1 du plan)
+         *     ventilent le même calcul par `media.is_simulated` — un tableau de bord ne doit jamais
+         *     annoncer un taux sans pouvoir dire sur quelle population il porte.
+         */
         AutoAttachRate: {
+            /** Total */
+            total: number;
+            /** Auto Time */
+            auto_time: number;
+            /** Auto Ocr */
+            auto_ocr: number;
+            /** Human */
+            human: number;
+            /** Unattached */
+            unattached: number;
+            /** Rate */
+            rate: number;
+            real: components["schemas"]["AutoAttachRatePopulation"];
+            simulated: components["schemas"]["AutoAttachRatePopulation"];
+        };
+        /**
+         * AutoAttachRatePopulation
+         * @description Même décompte que `AutoAttachRate`, restreint à une seule population (réel ou simulé).
+         */
+        AutoAttachRatePopulation: {
             /** Total */
             total: number;
             /** Auto Time */
@@ -1430,10 +1468,7 @@ export interface components {
         CollectionAddItemsRequest: {
             /** Media Ids */
             media_ids?: number[] | null;
-            /** From Search */
-            from_search?: {
-                [key: string]: unknown;
-            } | null;
+            from_search?: components["schemas"]["FromSearchFilters"] | null;
         };
         /** CollectionAddItemsResponse */
         CollectionAddItemsResponse: {
@@ -1697,6 +1732,57 @@ export interface components {
             status: "uploaded";
             /** Duplicate */
             duplicate: boolean;
+        };
+        /**
+         * FromSearchFilters
+         * @description `from_search` de `POST /collections/{id}/items` — **mêmes paramètres** que
+         *     `GET /search` (§3-K), en JSON plutôt qu'en query string.
+         *
+         *     Revue J2 (🟡 12) : remplace un `dict[str, Any]` non validé. Un champ mal typé (ex.
+         *     `shooting_id` envoyé comme entier plutôt que liste) levait auparavant une exception SQL
+         *     non capturée en aval de `services/facets.py` — `500` au lieu d'un `422` Pydantic normal.
+         */
+        FromSearchFilters: {
+            /** Q */
+            q?: string | null;
+            /** Shooting Id */
+            shooting_id?: number[] | null;
+            /** Client Id */
+            client_id?: number[] | null;
+            /** Team Id */
+            team_id?: number[] | null;
+            /** Driver Id */
+            driver_id?: number[] | null;
+            /** Car Number */
+            car_number?: string[] | null;
+            /** Circuit Id */
+            circuit_id?: number[] | null;
+            /** Camera Id */
+            camera_id?: number[] | null;
+            /** Lens */
+            lens?: string[] | null;
+            /** Iso Min */
+            iso_min?: number | null;
+            /** Iso Max */
+            iso_max?: number | null;
+            /** Focal Min */
+            focal_min?: number | null;
+            /** Focal Max */
+            focal_max?: number | null;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Status */
+            status?: string[] | null;
+            /** Is Simulated */
+            is_simulated?: boolean | null;
+            /**
+             * Series
+             * @default collapsed
+             * @enum {string}
+             */
+            series: "collapsed" | "all";
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -2406,6 +2492,8 @@ export interface components {
         ReviewDecisionsRequest: {
             /** Decisions */
             decisions: components["schemas"]["ReviewDecision"][];
+            /** Shooting Id */
+            shooting_id?: number | null;
         };
         /**
          * ReviewDecisionsResponse
@@ -2852,14 +2940,16 @@ export interface operations {
             query?: {
                 reset?: boolean;
             };
-            header?: never;
+            header: {
+                "X-Worker-Secret": string;
+            };
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4191,6 +4281,7 @@ export interface operations {
                 date_from?: string | null;
                 date_to?: string | null;
                 status?: string[] | null;
+                is_simulated?: boolean | null;
                 series?: "collapsed" | "all";
                 sort?: "shot_at" | "-shot_at";
                 cursor?: string | null;

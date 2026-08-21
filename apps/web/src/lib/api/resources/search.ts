@@ -20,10 +20,9 @@ export type SearchParams = {
   date_from?: string | null;
   date_to?: string | null;
   status?: AttachmentStatus[];
-  /** §3-N.1 / revue J2 🟠1 — `GET /search?is_simulated=`, absent du contrat régénéré au
-   * moment de cette correction (backend en cours d'ajout, § `implementation.md`) : paramètre
-   * de requête libre (`apiRequest.query` n'est pas typé depuis `schema.d.ts`), câblé par
-   * anticipation du contrat documenté plutôt que deviné à l'aveugle. */
+  /** §3-N.1 / revue J2 🟠1 — `GET /search?is_simulated=` : absent = tous, `false` = réels
+   * seulement, `true` = simulés seulement. Confirmé au contrat final (`schema.d.ts`,
+   * intégration live J2). */
   is_simulated?: boolean | null;
   series?: SeriesMode;
   sort?: SortMode;

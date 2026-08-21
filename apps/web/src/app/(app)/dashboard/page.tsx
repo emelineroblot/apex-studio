@@ -30,18 +30,17 @@ export default function DashboardPage() {
         <>
           {/*
            * Revue J2 🟠1 — « on ne fait pas passer un jeu généré pour du traitement réel »
-           * (§3-N.1 du plan). `GET /stats/auto-attach-rate` agrège encore réel et simulé
-           * sans ventilation (le backend doit l'ajouter au contrat, § `implementation.md`,
-           * point resté ouvert plutôt que deviné) : en attendant cette évolution du contrat,
-           * ce bandeau rend la présence de médias simulés dans ce chiffre explicite et
-           * renvoie vers la recherche — qui, elle, filtre déjà `is_simulated` — pour que
-           * quiconque veuille le taux « réel seul » puisse le vérifier en un clic plutôt que
-           * de découvrir après coup que la démonstration mélangeait les deux.
+           * (§3-N.1 du plan). `GET /stats/auto-attach-rate` ventile désormais le calcul par
+           * origine (`data.real` / `data.simulated`, contrat confirmé § intégration live J2) :
+           * le bandeau de contournement est remplacé par un rendu chiffré direct des deux
+           * populations. Le lien vers la recherche filtrée reste en aide à la vérification,
+           * pas en substitut du chiffre.
            */}
           <Notice tone="accent">
             <p>
-              Ce taux agrège des médias <strong>réels</strong> et des médias <strong>simulés</strong> (jeu de
-              démonstration, § brief). Consultez le détail par origine dans la recherche :{" "}
+              Le taux ci-dessous agrège des médias <strong>réels</strong> et des médias{" "}
+              <strong>simulés</strong> (jeu de démonstration, § brief) — le détail par origine est ventilé
+              plus bas. Vérifier dans la recherche :{" "}
               <Link href="/search?sim=0" className="font-medium underline hover:no-underline">
                 médias réels
               </Link>{" "}
@@ -72,6 +71,23 @@ export default function DashboardPage() {
             <Breakdown label="Rattachement manuel" value={data.human} total={data.total} tone="bg-warn-500" />
             <Breakdown label="Toujours à rattacher" value={data.unattached} total={data.total} tone="bg-ink-300" />
           </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <OriginCard
+              label="Médias réels"
+              href="/search?sim=0"
+              total={data.real.total}
+              rate={data.real.rate}
+              autoTotal={data.real.auto_time + data.real.auto_ocr}
+            />
+            <OriginCard
+              label="Médias simulés"
+              href="/search?sim=1"
+              total={data.simulated.total}
+              rate={data.simulated.rate}
+              autoTotal={data.simulated.auto_time + data.simulated.auto_ocr}
+            />
+          </div>
         </>
       ) : null}
     </div>
@@ -88,6 +104,51 @@ function Breakdown({ label, value, total, tone }: { label: string; value: number
         <div className={`h-full ${tone}`} style={{ width: `${Math.round(ratio * 100)}%` }} />
       </div>
       <p className="mt-1 text-xs text-ink-400">{formatPercent(ratio)}</p>
+    </Card>
+  );
+}
+
+/**
+ * Ventilation réel/simulé (§3-N.1, revue J2 🟠1) — `AutoAttachRate.real`/`.simulated`
+ * (`AutoAttachRatePopulation`, mêmes 6 champs que la forme de tête). Un total à 0 signifie
+ * une population absente du catalogue (ex. `demo-photos/` vide : aucun média réel), pas une
+ * erreur — `formatPercent(0)` reste honnête dans ce cas plutôt que masqué.
+ */
+function OriginCard({
+  label,
+  href,
+  total,
+  rate,
+  autoTotal,
+}: {
+  label: string;
+  href: string;
+  total: number;
+  rate: number;
+  autoTotal: number;
+}) {
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">{label}</p>
+        <Link href={href} className="text-xs font-medium text-accent-700 underline hover:no-underline">
+          Voir dans la recherche
+        </Link>
+      </div>
+      {total === 0 ? (
+        <p className="mt-2 text-sm text-ink-500">Aucun média dans cette population pour l&apos;instant.</p>
+      ) : (
+        <>
+          <p className="mt-2 text-3xl font-semibold text-ink-900">{formatPercent(rate)}</p>
+          <p className="mt-1 text-xs text-ink-500">
+            {autoTotal} sur {total} média{total > 1 ? "s" : ""} rattaché{autoTotal > 1 ? "s" : ""} sans
+            intervention humaine.
+          </p>
+          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-ink-100">
+            <div className="h-full bg-accent-600" style={{ width: `${Math.round(rate * 100)}%` }} />
+          </div>
+        </>
+      )}
     </Card>
   );
 }
