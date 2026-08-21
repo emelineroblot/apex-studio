@@ -3,18 +3,40 @@
 """
 
 import uuid
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Security
+from fastapi import APIRouter, Depends, HTTPException, Security
+from sqlalchemy.orm import Session
 
+from apex.db import get_db
+from apex.models.billing import ShareLink
 from apex.routers._common import bearer_scheme, not_implemented
 from apex.schemas.billing import DeliveryOut
+from apex.security import CurrentUser
+from apex.services import access
 
 router = APIRouter(tags=["sharing"], dependencies=[Security(bearer_scheme)])
 
 
 @router.delete("/share-links/{share_link_id}", status_code=204, summary="Révoquer un lien")
-def revoke_share_link(share_link_id: uuid.UUID) -> None:
-    not_implemented("DELETE /share-links/{id}")
+def revoke_share_link(
+    share_link_id: uuid.UUID, user: CurrentUser, db: Session = Depends(get_db)
+) -> None:
+    """Révocation immédiate, et vraiment immédiate : `security.get_client_scope` relit le
+    lien à **chaque** requête de l'espace client, donc une session déjà ouverte s'éteint
+    au prochain appel plutôt qu'à l'expiration de son JWT une demi-heure plus tard."""
+    access.require_owner(user, message="Seul le dirigeant peut révoquer un lien de partage.")
+    link = db.get(ShareLink, share_link_id)
+    if link is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "not_found", "message": "Lien introuvable.", "detail": None},
+        )
+    # Idempotent : révoquer deux fois n'est pas une erreur, et surtout ne repousse pas la
+    # date de révocation déjà enregistrée.
+    if link.revoked_at is None:
+        link.revoked_at = datetime.now(UTC)
+        db.commit()
 
 
 @router.get("/deliveries/{delivery_id}", response_model=DeliveryOut, summary="Suivi de livraison")

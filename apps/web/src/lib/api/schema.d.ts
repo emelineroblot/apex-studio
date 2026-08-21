@@ -971,7 +971,12 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Révoquer un lien */
+        /**
+         * Révoquer un lien
+         * @description Révocation immédiate, et vraiment immédiate : `security.get_client_scope` relit le
+         *     lien à **chaque** requête de l'espace client, donc une session déjà ouverte s'éteint
+         *     au prochain appel plutôt qu'à l'expiration de son JWT une demi-heure plus tard.
+         */
         delete: operations["revoke_share_link_api_v1_share_links__share_link_id__delete"];
         options?: never;
         head?: never;
@@ -1072,6 +1077,23 @@ export interface paths {
         };
         /** Flux filigrané — `404` si le média est hors de la collection du jeton */
         get: operations["public_media_preview_api_v1_public_media__media_id__file_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/media/{media_id}/file/thumb": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Vignette filigranée à la volée — `404` hors de la collection du jeton */
+        get: operations["public_media_thumb_api_v1_public_media__media_id__file_thumb_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5250,6 +5272,37 @@ export interface operations {
         };
     };
     public_media_preview_api_v1_public_media__media_id__file_preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                media_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_media_thumb_api_v1_public_media__media_id__file_thumb_get: {
         parameters: {
             query?: never;
             header?: never;

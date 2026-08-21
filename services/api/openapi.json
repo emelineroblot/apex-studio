@@ -4030,6 +4030,7 @@
           "sharing"
         ],
         "summary": "Révoquer un lien",
+        "description": "Révocation immédiate, et vraiment immédiate : `security.get_client_scope` relit le\nlien à **chaque** requête de l'espace client, donc une session déjà ouverte s'éteint\nau prochain appel plutôt qu'à l'expiration de son JWT une demi-heure plus tard.",
         "operationId": "revoke_share_link_api_v1_share_links__share_link_id__delete",
         "security": [
           {
@@ -4349,6 +4350,51 @@
         ],
         "summary": "Flux filigrané — `404` si le média est hors de la collection du jeton",
         "operationId": "public_media_preview_api_v1_public_media__media_id__file_preview_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "media_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Media Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/media/{media_id}/file/thumb": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Vignette filigranée à la volée — `404` hors de la collection du jeton",
+        "operationId": "public_media_thumb_api_v1_public_media__media_id__file_thumb_get",
         "security": [
           {
             "HTTPBearer": []
