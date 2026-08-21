@@ -66,6 +66,10 @@ function toReviewItem(candidateId: number): ReviewItem | null {
     normalized_number: candidate.normalized_number,
     confidence: candidate.confidence,
     bbox: candidate.bbox,
+    // `resolution` est désormais explicite sur `ReviewItem` (§ passe d'intégration live
+    // J2) — la distinction « pas sûr » (`review`) vs « incohérent » (`not_engaged`) ne se
+    // déduit plus de la nullabilité de `suggested_engagement`, voir `ReviewCard.tsx`.
+    resolution: candidate.resolution,
     suggested_engagement: suggested,
     other_engagements: others,
   };

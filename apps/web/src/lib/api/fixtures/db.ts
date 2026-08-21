@@ -555,10 +555,10 @@ export type OcrCandidateFixture = OcrCandidateOut & { media_id: number };
  * Candidats bruts persistés (§3-J.4 : « changer les seuils redistribue les cas, sans
  * relancer l'OCR ») — un candidat par média de la file de validation ci-dessus
  * (`buildMedia`, section « J2 »), plus quelques candidats déjà résolus (`accepted`/
- * `rejected`) pour peupler l'historique visible sur `GET /media/{id}/ocr`. `bbox` est une
- * hypothèse frontend documentée dans `implementation.md` (§ Contrat non fermé côté
- * backend : `Bbox` = `additionalProperties: true`) : coordonnées **normalisées** `[0..1]`
- * relatives à l'aperçu affiché, pas des pixels absolus.
+ * `rejected`) pour peupler l'historique visible sur `GET /media/{id}/ocr`. `bbox` est
+ * désormais le vrai schéma fermé du contrat (`OcrBoundingBox`, `apex.schemas.review`) :
+ * `x/y/w/h` **normalisés** `[0..1]` (fraction de l'image), `quad`/`image_width`/
+ * `image_height` optionnels — passe d'intégration live J2, voir `implementation.md`.
  */
 export const ocrCandidates: OcrCandidateFixture[] = [
   {
@@ -567,7 +567,7 @@ export const ocrCandidates: OcrCandidateFixture[] = [
     raw_text: "Z7",
     normalized_number: "27",
     confidence: 0.62,
-    bbox: { x: 0.42, y: 0.55, width: 0.16, height: 0.09 },
+    bbox: { x: 0.42, y: 0.55, w: 0.16, h: 0.09 },
     engine_version: "rapidocr-ppocr-v4-sim",
     resolution: "review",
     engagement_id: 2,
@@ -578,7 +578,7 @@ export const ocrCandidates: OcrCandidateFixture[] = [
     raw_text: "S",
     normalized_number: "5",
     confidence: 0.51,
-    bbox: { x: 0.38, y: 0.6, width: 0.1, height: 0.08 },
+    bbox: { x: 0.38, y: 0.6, w: 0.1, h: 0.08 },
     engine_version: "rapidocr-ppocr-v4-sim",
     resolution: "review",
     engagement_id: 3,
@@ -589,7 +589,7 @@ export const ocrCandidates: OcrCandidateFixture[] = [
     raw_text: "91",
     normalized_number: "91",
     confidence: 0.93,
-    bbox: { x: 0.4, y: 0.52, width: 0.18, height: 0.1 },
+    bbox: { x: 0.4, y: 0.52, w: 0.18, h: 0.1 },
     engine_version: "rapidocr-ppocr-v4-sim",
     resolution: "not_engaged",
     engagement_id: null,
@@ -600,7 +600,7 @@ export const ocrCandidates: OcrCandidateFixture[] = [
     raw_text: "71",
     normalized_number: "71",
     confidence: 0.88,
-    bbox: { x: 0.35, y: 0.48, width: 0.17, height: 0.1 },
+    bbox: { x: 0.35, y: 0.48, w: 0.17, h: 0.1 },
     engine_version: "rapidocr-ppocr-v4-sim",
     resolution: "not_engaged",
     engagement_id: null,
@@ -613,7 +613,7 @@ export const ocrCandidates: OcrCandidateFixture[] = [
     raw_text: "5",
     normalized_number: "5",
     confidence: 0.91,
-    bbox: { x: 0.44, y: 0.5, width: 0.14, height: 0.09 },
+    bbox: { x: 0.44, y: 0.5, w: 0.14, h: 0.09 },
     engine_version: "rapidocr-ppocr-v4-sim",
     resolution: "auto",
     engagement_id: 3,

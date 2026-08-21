@@ -6,18 +6,18 @@ import { Badge } from "@/components/ui/Badge";
 import { formatDateTime } from "@/lib/format";
 
 /**
- * Boîte OCR surlignée sur l'aperçu grand format (§ tâche 1). `bbox` n'est pas fermé par le
- * contrat (`OcrCandidateOut.bbox: additionalProperties: true`) — hypothèse frontend
- * documentée dans `implementation.md` : coordonnées **normalisées `[0..1]`**
- * `{x, y, width, height}`, relatives à l'aperçu affiché. À confirmer avec le backend quand
- * `pipeline/ocr/engine.py` sera branché.
+ * Boîte OCR surlignée sur l'aperçu grand format (§ tâche 1). `bbox` est désormais le vrai
+ * schéma fermé du contrat (`OcrBoundingBox`, `apex.schemas.review`) : `x/y/w/h`
+ * **normalisés `[0..1]`**, fraction de l'image, indépendants de la résolution d'affichage
+ * — confirmé par la docstring de module côté backend. `quad`/`image_width`/
+ * `image_height` existent aussi sur le contrat mais ne sont pas encore consommés ici (pas
+ * de rendu incliné prévu au plan).
  */
-function readBbox(bbox: unknown): { x: number; y: number; width: number; height: number } | null {
-  if (!bbox || typeof bbox !== "object") return null;
-  const b = bbox as Record<string, unknown>;
-  const { x, y, width, height } = b;
-  if (typeof x === "number" && typeof y === "number" && typeof width === "number" && typeof height === "number") {
-    return { x, y, width, height };
+function readBbox(bbox: ReviewItem["bbox"] | null | undefined): { x: number; y: number; width: number; height: number } | null {
+  if (!bbox) return null;
+  const { x, y, w, h } = bbox;
+  if (typeof x === "number" && typeof y === "number" && typeof w === "number" && typeof h === "number") {
+    return { x, y, width: w, height: h };
   }
   return null;
 }
@@ -37,7 +37,15 @@ export function ReviewCard({
   onNumberShortcut: (engagementId: number) => void;
 }) {
   const box = readBbox(item.bbox);
-  const isInconsistent = item.suggested_engagement == null;
+  // `resolution` porte désormais explicitement la distinction « pas sûr » (`review`, score
+  // entre les seuils, engagement toujours suggéré) vs « sûr mais incohérent »
+  // (`not_engaged`, numéro absent des engagements) — § passe d'intégration live J2.
+  // Auparavant déduite de `item.suggested_engagement == null`, une corrélation qui tenait
+  // par construction de `classify.decide()` côté backend mais que rien ne garantissait
+  // côté contrat. `GET /review/queue` ne renvoie en pratique que des candidats `review`
+  // (les `not_engaged` vivent dans le bac « incohérences » de la recherche à facettes),
+  // mais `ReviewCard` reste correct si ça change un jour.
+  const isInconsistent = item.resolution === "not_engaged";
 
   return (
     <div
@@ -89,7 +97,7 @@ export function ReviewCard({
           </p>
         </div>
 
-        {item.suggested_engagement ? (
+        {!isInconsistent && item.suggested_engagement ? (
           <div className="rounded-lg border border-accent-100 bg-accent-50 p-3 text-sm">
             <p className="font-medium text-accent-800">
               Engagement suggéré — n°{item.suggested_engagement.car_number}

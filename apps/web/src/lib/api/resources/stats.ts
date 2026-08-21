@@ -8,6 +8,9 @@ export async function autoAttachRate(
 ): Promise<AutoAttachRate> {
   if (API_MODE === "fixtures") return fixtures.autoAttachRate(params);
   return apiRequest<AutoAttachRate>("/stats/auto-attach-rate", {
-    query: { shooting_id: params.shooting_id, from_: params.from, to: params.to },
+    // Contrat J2 (§ passe d'intégration live) : le paramètre de requête est désormais
+    // `from` (plus `from_`) sur `GET /stats/auto-attach-rate` — `from` n'est pas un mot
+    // réservé en TypeScript, contrairement à Python.
+    query: { shooting_id: params.shooting_id, from: params.from, to: params.to },
   });
 }

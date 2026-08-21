@@ -64,7 +64,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Régénère le jeu de démo (J2) */
+        /**
+         * Régénère le jeu de démo (J2) — `owner` uniquement
+         * @description Enqueue `demo_reset` (§3-N.2) puis draine — même patron que `PUT /settings/ocr`
+         *     (§3-E.7) : la file reste l'unique chemin d'écriture, mais la démo veut un résultat
+         *     perceptible dès la réponse HTTP plutôt qu'une attente du prochain tick.
+         */
         post: operations["demo_seed_api_v1_demo_seed_post"];
         delete?: never;
         options?: never;
@@ -514,7 +519,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Candidats OCR bruts du média (J2) — score et boîte, affichés dans l'UI */
+        /**
+         * Candidats OCR bruts du média (J2) — score et boîte, affichés dans l'UI
+         * @description Les candidats **bruts**, tels que persistés : c'est la matière première du jalon.
+         *
+         *     Ce que le modèle a lu, avec quelle confiance et à quel endroit de l'image, est visible
+         *     dans l'UI — pas seulement la conclusion. C'est ce qui rend le score explicable et ce
+         *     qui permet de rejouer une classification sans jamais relancer une inférence.
+         */
         get: operations["get_media_ocr_api_v1_media__media_id__ocr_get"];
         put?: never;
         post?: never;
@@ -1933,6 +1945,26 @@ export interface components {
             series_member_count: number | null;
         };
         /**
+         * OcrBoundingBox
+         * @description Boîte de détection — voir docstring de module pour la convention `x/y/w/h`/`quad`.
+         */
+        OcrBoundingBox: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+            /** W */
+            w: number;
+            /** H */
+            h: number;
+            /** Quad */
+            quad?: number[][] | null;
+            /** Image Width */
+            image_width?: number | null;
+            /** Image Height */
+            image_height?: number | null;
+        };
+        /**
          * OcrCandidateOut
          * @description Candidat brut persisté — score et boîte, affichés dans l'UI (`GET /media/{id}/ocr`).
          */
@@ -1945,10 +1977,7 @@ export interface components {
             normalized_number: string | null;
             /** Confidence */
             confidence: number;
-            /** Bbox */
-            bbox: {
-                [key: string]: unknown;
-            };
+            bbox: components["schemas"]["OcrBoundingBox"];
             /** Engine Version */
             engine_version: string;
             /**
@@ -2403,10 +2432,12 @@ export interface components {
             normalized_number: string | null;
             /** Confidence */
             confidence: number;
-            /** Bbox */
-            bbox: {
-                [key: string]: unknown;
-            };
+            bbox: components["schemas"]["OcrBoundingBox"];
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "auto" | "review" | "abstain" | "not_engaged" | "accepted" | "rejected";
             suggested_engagement: components["schemas"]["SuggestedEngagement"] | null;
             /** Other Engagements */
             other_engagements: components["schemas"]["SuggestedEngagement"][];
@@ -4313,6 +4344,8 @@ export interface operations {
     list_collections_api_v1_collections_get: {
         parameters: {
             query?: {
+                client_id?: number | null;
+                status?: string | null;
                 cursor?: string | null;
                 limit?: number;
             };
@@ -4603,7 +4636,7 @@ export interface operations {
         parameters: {
             query?: {
                 shooting_id?: number | null;
-                from_?: string | null;
+                from?: string | null;
                 to?: string | null;
             };
             header?: never;
