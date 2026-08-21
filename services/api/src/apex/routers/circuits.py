@@ -21,8 +21,12 @@ def list_circuits(
     cursor: str | None = None,
     limit: int = Query(default=50, le=100),
 ) -> Page[CircuitOut]:
-    items, next_cursor = paginate_by_id(db, select(Circuit), Circuit.id, cursor=cursor, limit=limit)
-    return Page(items=[CircuitOut.model_validate(c) for c in items], next_cursor=next_cursor)
+    items, next_cursor, total = paginate_by_id(
+        db, select(Circuit), Circuit.id, cursor=cursor, limit=limit, with_total=True
+    )
+    return Page(
+        items=[CircuitOut.model_validate(c) for c in items], next_cursor=next_cursor, total=total
+    )
 
 
 @router.post(

@@ -32,6 +32,10 @@ from apex.queue.enqueue import enqueue
 from apex.queue.registry import JobContext, handler
 from apex.services.app_settings import get_burst_gap_seconds, get_phash_max_distance
 from apex.services.ocr_settings import load_ocr_settings
+from apex.services.search_projection import (
+    project_media_search,
+    project_media_search_for_shooting,
+)
 
 
 @handler("reattach_camera", max_attempts=3)
@@ -137,5 +141,16 @@ def handle_reattach_camera(ctx: JobContext) -> dict[str, Any]:
                 phash_max_distance=phash_max_distance,
             )
         session.flush()
+
+    # §3-F.3 : `shot_at` et `attachment_status` viennent de bouger pour tout le parc du
+    # boîtier — la projection de recherche doit suivre, sans quoi le recalage rend des
+    # médias introuvables plutôt que re-rattachés (constat laissé par l'agent OCR).
+    if medias:
+        project_media_search(session, [m.id for m in medias])
+    # Le regroupement des rafales (ci-dessus) touche potentiellement des médias d'un autre
+    # boîtier du **même** shooting (il efface/reconstruit toutes les séries du shooting) :
+    # une réindexation par shooting complet, pas seulement par les médias de ce boîtier.
+    for shooting_id in affected_shooting_ids:
+        project_media_search_for_shooting(session, shooting_id)
 
     return {"checked": len(medias), "reattached": reattached, "ocr_enqueued": ocr_enqueued}

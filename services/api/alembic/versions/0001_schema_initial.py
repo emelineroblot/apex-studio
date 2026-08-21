@@ -925,10 +925,15 @@ def upgrade() -> None:
         "media_search",
         sa.Column("media_id", sa.BigInteger(), nullable=False),
         sa.Column("shooting_id", sa.BigInteger(), nullable=True),
+        sa.Column("uploaded_by", sa.BigInteger(), nullable=True),
         sa.Column("client_id", sa.BigInteger(), nullable=True),
+        sa.Column("circuit_id", sa.BigInteger(), nullable=True),
         sa.Column("camera_id", sa.BigInteger(), nullable=True),
         sa.Column("lens_model", sa.String(length=255), nullable=True),
         sa.Column("attachment_status", sa.String(length=30), nullable=False),
+        sa.Column("ingest_status", sa.String(length=20), server_default="uploaded", nullable=False),
+        sa.Column("is_simulated", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column("series_id", sa.BigInteger(), nullable=True),
         sa.Column("shot_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("iso", sa.Integer(), nullable=True),
         sa.Column("focal_length", sa.Numeric(precision=8, scale=2), nullable=True),
@@ -954,6 +959,8 @@ def upgrade() -> None:
     )
     op.create_index("ms_camera_idx", "media_search", ["camera_id"], unique=False)
     op.create_index("ms_client_idx", "media_search", ["client_id"], unique=False)
+    op.create_index("ms_circuit_idx", "media_search", ["circuit_id"], unique=False)
+    op.create_index("ms_uploaded_by_idx", "media_search", ["uploaded_by"], unique=False)
     op.create_index(
         "ms_drivers_gin", "media_search", ["driver_ids"], unique=False, postgresql_using="gin"
     )

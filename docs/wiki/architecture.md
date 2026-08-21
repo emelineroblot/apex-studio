@@ -1,6 +1,6 @@
 ---
 type: architecture
-maj: 2026-08-20
+maj: 2026-08-21
 ---
 
 # Décisions d'architecture
@@ -277,3 +277,76 @@ repart d'une base vierge (`downgrade base` → `upgrade head` → `seed`) plutô
 révisions. Corollaire à ne pas oublier : éditer la migration en place n'a **aucun effet** sur
 une base déjà créée — voir `pieges-projet.md`. Et puisqu'il n'y a qu'une base de test, deux
 `pytest` concurrents s'interbloquent sur le `DROP SCHEMA`.
+
+## Projection de recherche `media_search` : réindexation synchrone, pas un job systématique
+*Décidé le 2026-08-21 — run `J2 recherche et jeu de démo`*
+
+**Décision.** `services/search_projection.py::project_media_search(session, media_ids)` est un
+unique `INSERT … SELECT … ON CONFLICT (media_id) DO UPDATE`, appelé **directement et dans la
+même transaction** à chaque endroit où `attachment_status`, un rattachement ou une série
+changent (ingestion, OCR, reclassement, arbitrage humain, rattachement/retrait manuel, recalage
+d'horloge). `media_ids=None` reconstruit la table entière — c'est le chemin qu'emprunte aussi le
+générateur de démo, jamais un chemin de projection séparé. Le job `reindex_media` existe
+(registre §3-E.3) mais n'est **pas** le mécanisme principal : c'est un point d'entrée
+asynchrone secondaire, pour un déclenchement externe explicite.
+
+**Pourquoi.** L'agent OCR avait laissé le constat en sortie de son lot : `reindex_media`
+n'était câblé nulle part, `classify.project_media_batch` étant le seul endroit où l'OCR fait
+bouger un `attachment_status`. Passer par la file à chaque changement (enqueue +
+attente du prochain tick) aurait rendu la recherche périmée pendant la fenêtre entre l'action et
+le drainage — inacceptable pour un critère d'acceptation qui promet une recherche
+« utilisable », pas « éventuellement à jour ». La cohérence prime sur le découplage ici.
+
+**Conséquences.** Toute nouvelle route ou tout nouveau handler qui touche
+`attachment_status`/`media_engagement`/`is_series_representative` doit appeler
+`search_projection` avant son `commit()`, sinon la recherche perd silencieusement le média —
+« une projection périmée est un média introuvable » (formule reprise du constat de l'agent OCR).
+`sweep_orphans` (J1) a été corrigé au passage : un objet orphelin devenait une ligne `media`
+sans jamais rejoindre `media_search`.
+
+## Recherche à facettes : neuf agrégats indexés plutôt qu'un `GROUPING SETS` fusionné
+*Décidé le 2026-08-21 — run `J2 recherche et jeu de démo`*
+
+**Décision.** Le compteur de chaque facette multi-sélection (§3-K.2, règle « sauf soi ») est
+calculé par sa **propre** requête, filtrée par tous les prédicats actifs sauf le sien —
+`services/facets.py`, 9 petits agrégats (6 scalaires, 3 tableaux via `unnest()`/
+`table_valued(joins_implicitly=True)`) plutôt que le squelette `GROUPING SETS` esquissé au
+plan.
+
+**Pourquoi.** Le squelette du plan réutilise une seule CTE `filtered` (tous les filtres
+appliqués) pour toutes les facettes via `GROUPING SETS` — correct **uniquement** quand aucun
+filtre multi-sélection n'est actif. Dès qu'on coche une écurie, cette lecture littérale ferait
+tomber les compteurs des autres écuries à zéro : elle **viole** la règle qu'elle est censée
+implémenter. Neuf requêtes plutôt que 3 à 5 coûte plus de round-trips, mais chacune reste un
+agrégat sur un sous-ensemble indexé de ≤ ~8000 lignes — le budget mesuré
+(`docs/search-perf.md`, p95 ≈ 105 ms bout en bout) montre que la marge est large.
+
+**Conséquences.** Si le volume dépassait largement 8000 médias, fusionner les facettes
+**inactives** dans une seule requête `GROUPING SETS` (et ne garder l'agrégat dédié que pour les
+facettes réellement actives, rarement plus de 2-3 à la fois) resterait l'optimisation évidente
+— non faite ici faute de nécessité mesurée, à trancher sur un nouveau chiffre, pas par
+anticipation.
+
+## Générateur de démo : `Model.__table__` (Core), jamais `Model` (ORM), pour les écritures en lot
+*Décidé le 2026-08-21 — run `J2 recherche et jeu de démo`*
+
+**Décision.** Toutes les écritures en lot du générateur de démo (`apex/demo/seed.py`) —
+`media`, `media_series`, `media_engagement`, `media_ocr_candidate`, et les `UPDATE` en
+`executemany` (`bindparam`) qui posent `series_id`/le représentant de chaque rafale — passent
+par `insert(Model.__table__)`/`update(Model.__table__)` (Core pur), jamais par
+`insert(Model)`/`update(Model)` (la classe ORM).
+
+**Pourquoi.** Mesuré, pas supposé : sur ce générateur, `insert(MediaEngagement)` (ORM) exécuté
+via `session.execute()` alors que l'identity map de la session porte déjà des milliers d'objets
+`Media`/`MediaSeries` coûtait **~45× plus lent** que `insert(MediaEngagement.__table__)` — 4,6 s
+contre 0,07 s par lot de 500 lignes (`cProfile`, dominé par l'attente réseau). Le seed complet
+(~8000 médias) est passé de 89 s à ~7 s après ce seul changement, plus l'abandon de `putpixel`
+pixel-à-pixel pour le dégradé des vignettes simulées (numpy vectorisé). Objectif du plan
+« < 15 s » largement tenu, marge de sécurité pour un environnement de test plus lent.
+
+**Conséquences.** Tout futur générateur/import en lot sur ce projet doit utiliser
+`Model.__table__` dès qu'un volume significatif est en jeu et que la session porte déjà
+beaucoup d'objets — la bascule ORM → Core doit être un réflexe de performance documenté, pas
+une découverte à chaque fois. `update(Model.__table__)` en `executemany` exige
+`.where(Colonne == bindparam("nom"))` avec un nom de paramètre **différent** du nom de la
+colonne ciblée si on veut passer par un mode ORM ; en Core pur, le bind name est libre.

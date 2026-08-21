@@ -2,7 +2,7 @@
 
 > Rapport **généré** par `uv run pytest -m ocr_eval`. Ne pas éditer à la main : toute modification est écrasée à la prochaine exécution.
 
-- Généré le : 2026-08-21 01:34 UTC
+- Généré le : 2026-08-21 02:59 UTC
 - Jeu : 360 images synthétiques, 6 niveaux, graine fixe
 - Table des engagements simulée : **44 voitures au départ** — paramètre décisif, cf. « Limites »
 - Seuils évalués : `ocr_high = 0.85`, `ocr_low = 0.45`

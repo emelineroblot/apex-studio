@@ -5,7 +5,6 @@ de recherche à facettes, 1:1 avec `media`, reconstruite par le pipeline — §3
 from datetime import datetime
 
 from sqlalchemy import (
-    ARRAY,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -18,7 +17,12 @@ from sqlalchemy import (
     desc,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+
+# `postgresql.ARRAY`, pas `sqlalchemy.ARRAY` générique (§3-K.2) : seul le comparateur
+# spécifique au dialecte expose `.overlap()` (opérateur `&&`), utilisé par
+# `services/facets.py` pour les facettes multi-sélection sur tableau (équipes, pilotes,
+# numéros). Le générique ne le porte pas — vérifié, `hasattr(..., "overlap") is False`.
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apex.models.base import Base, IdMixin
@@ -68,6 +72,8 @@ class MediaSearch(Base):
         Index("ms_order_idx", desc("shot_at"), desc("media_id")),
         Index("ms_shooting_idx", "shooting_id", desc("shot_at")),
         Index("ms_client_idx", "client_id"),
+        Index("ms_circuit_idx", "circuit_id"),
+        Index("ms_uploaded_by_idx", "uploaded_by"),
         Index("ms_camera_idx", "camera_id"),
         Index("ms_lens_idx", "lens_model"),
         Index("ms_status_idx", "attachment_status"),
@@ -88,10 +94,25 @@ class MediaSearch(Base):
         BigInteger, ForeignKey("media.id", ondelete="CASCADE"), primary_key=True
     )
     shooting_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Dupliqué depuis `media.uploaded_by` — nécessaire pour reproduire, sans jointure,
+    # `services/access.py::media_visibility_clause` (un photographe garde ses propres
+    # dépôts visibles même avant tout rattachement à un shooting).
+    uploaded_by: Mapped[int | None] = mapped_column(BigInteger)
     client_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Facette « circuit » (§3-K du plan) — 1:1 via `shooting.circuit_id`, donc scalaire comme
+    # `client_id`/`camera_id`, pas un tableau (contrairement à `team_ids`/`driver_ids`, qui
+    # viennent de la relation N:N `media_engagement`).
+    circuit_id: Mapped[int | None] = mapped_column(BigInteger)
     camera_id: Mapped[int | None] = mapped_column(BigInteger)
     lens_model: Mapped[str | None] = mapped_column(String(255))
     attachment_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    # Dupliqués depuis `media` (§3-K.1, « zéro jointure côté lecture ») : nécessaires à
+    # `MediaSummary` (contrat `GET /search`) sans repasser par `media` pour chaque page.
+    ingest_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="uploaded"
+    )
+    is_simulated: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    series_id: Mapped[int | None] = mapped_column(BigInteger)
     shot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     iso: Mapped[int | None] = mapped_column(Integer)
     focal_length: Mapped[float | None] = mapped_column(Numeric(8, 2))

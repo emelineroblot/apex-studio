@@ -6,10 +6,10 @@ Deux pilotes du même moteur `queue.runner.drain()` :
 - `worker --once` : un seul passage borné dans le temps (`--budget-seconds`), c'est le
   mode qu'appellera l'équivalent serverless (`POST /jobs/tick`, à câbler au lot suivant).
 
-Squelette fonctionnel : le registre de handlers (`apex.queue.handlers`) est vide à ce
-stade du jalon — un job réclamé échouera donc explicitement (`status='failed'`, motif
-« kind inconnu »), ce qui est le comportement attendu tant qu'aucun handler métier n'est
-enregistré (§3-E.3, « jamais de silence »).
+`seed --reset` régénère le jeu de démo (§3-N.1, `apex.demo.seed.run_seed`, graine fixe) et
+`reindex` reconstruit `media_search` en une seule requête (`services/search_projection.py`,
+§3-K) — les deux tournent hors file, en direct, pour rester des commandes scriptables sans
+worker qui tourne.
 """
 
 from __future__ import annotations
@@ -117,6 +117,53 @@ def fetch_models(
         typer.echo(f"Aucun poids trouvé à recopier vers {target}.")
         raise typer.Exit(code=1)
     typer.echo(f"{len(copied)} poids copiés vers {target} : {', '.join(copied)}")
+
+
+@app.command("seed")
+def seed(
+    reset: bool = typer.Option(
+        False, "--reset", help="Truque et régénère le jeu de démo (sinon no-op si déjà peuplé)."
+    ),
+) -> None:
+    """Régénère le jeu de démo (§3-N.1) — déterministe, graine fixe.
+
+    Hors file : appelée en direct, dans **une seule transaction** (Décision N.2, « soit
+    tout est restauré, soit rien ne bouge »). Le job `demo_reset` (`POST /demo/seed`, cron
+    nocturne J3) appelle exactement la même fonction.
+    """
+    from apex.db import session_scope
+    from apex.demo.seed import run_seed
+
+    with session_scope() as db:
+        result = run_seed(db, reset=reset)
+
+    if not result.ran:
+        typer.echo("Jeu de démo déjà peuplé — no-op (utiliser --reset pour régénérer).")
+        return
+    typer.echo(
+        f"Seed terminé en {result.duration_ms} ms : {result.simulated_media} médias simulés, "
+        f"{result.real_media} médias réels, {result.shootings} shootings, "
+        f"{result.engagements} engagements. Répartition : {result.attachment_status_counts}"
+    )
+    if result.real_photos_skipped_reason:
+        typer.echo(f"Photos réelles : {result.real_photos_skipped_reason}")
+
+
+@app.command("reindex")
+def reindex() -> None:
+    """Reconstruit `media_search` pour **tout** le catalogue (§3-K du plan).
+
+    Une seule requête `INSERT … SELECT … ON CONFLICT DO UPDATE` — la même que la
+    réindexation incrémentale déclenchée à chaque changement de rattachement.
+    """
+    from apex.db import session_scope
+    from apex.services.search_projection import project_media_search
+
+    started = time.monotonic()
+    with session_scope() as db:
+        touched = project_media_search(db, None)
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    typer.echo(f"Réindexation complète : {touched} médias, {elapsed_ms} ms.")
 
 
 def main() -> None:

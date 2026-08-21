@@ -28,11 +28,12 @@ from apex.schemas.media import (
     MediaSummary,
     QuarantineDetail,
 )
-from apex.schemas.review import MediaOcrResponse, OcrCandidateOut
+from apex.schemas.review import MediaOcrResponse, OcrBoundingBox, OcrCandidateOut
 from apex.security import CurrentUser
 from apex.services import access
 from apex.services.ocr_settings import load_ocr_settings
 from apex.services.pagination import paginate_by_id
+from apex.services.search_projection import project_media
 from apex.services.storage import ObjectNotFoundError, get_storage_client
 
 router = APIRouter(prefix="/media", tags=["media"])
@@ -142,7 +143,9 @@ def list_media(
     if quarantined:
         stmt = stmt.where(Media.ingest_status == "quarantined")
 
-    items, next_cursor = paginate_by_id(db, stmt, Media.id, cursor=cursor, limit=limit)
+    items, next_cursor, total = paginate_by_id(
+        db, stmt, Media.id, cursor=cursor, limit=limit, with_total=True
+    )
 
     # Un seul aller-retour pour toute la page plutôt qu'un par média (`member_count` est
     # déjà tenu à jour sur `media_series`, cf. `pipeline/series.py` — pas de N+1 ici).
@@ -158,6 +161,7 @@ def list_media(
     return Page(
         items=[_to_summary(m, series_member_count=member_counts.get(m.series_id)) for m in items],
         next_cursor=next_cursor,
+        total=total,
     )
 
 
@@ -319,6 +323,8 @@ def attach_media(
     media.attachment_status = "shooting_attached"
     media.attachment_source = "human"
     media.attachment_detail = None
+    db.flush()
+    project_media(db, media.id)
     db.commit()
     db.refresh(media)
     return _media_out(db, media)
@@ -383,6 +389,8 @@ def add_media_engagement(
     )
     media.attachment_status = "engagement_attached"
     media.attachment_source = "human"
+    db.flush()
+    project_media(db, media.id)
     db.commit()
     return MediaEngagementOut(
         engagement_id=engagement.id,
@@ -431,6 +439,8 @@ def delete_media_engagement(
         media.attachment_status = (
             "shooting_attached" if media.shooting_id is not None else "unattached"
         )
+    db.flush()
+    project_media(db, media.id)
     db.commit()
 
 
@@ -461,7 +471,7 @@ def get_media_ocr(
                 raw_text=candidate.raw_text,
                 normalized_number=candidate.normalized_number,
                 confidence=float(candidate.confidence),
-                bbox=candidate.bbox,
+                bbox=OcrBoundingBox.model_validate(candidate.bbox),
                 engine_version=candidate.engine_version,
                 resolution=candidate.resolution,
                 engagement_id=candidate.engagement_id,

@@ -33,6 +33,7 @@ from apex.models.shooting import Engagement
 from apex.pipeline.ocr import classify
 from apex.routers._common import bearer_scheme
 from apex.schemas.review import (
+    OcrBoundingBox,
     ReviewDecision,
     ReviewDecisionError,
     ReviewDecisionsRequest,
@@ -46,6 +47,7 @@ from apex.security import CurrentUser
 from apex.services import access
 from apex.services.ocr_settings import load_ocr_settings
 from apex.services.pagination import paginate_by_id
+from apex.services.search_projection import project_media_search
 
 router = APIRouter(prefix="/review", tags=["review"], dependencies=[Security(bearer_scheme)])
 
@@ -129,7 +131,7 @@ def review_queue(
     db: Session = Depends(get_db),
 ) -> ReviewQueueResponse:
     stmt = _queue_stmt(user, shooting_id)
-    candidates, next_cursor = paginate_by_id(
+    candidates, next_cursor, _total = paginate_by_id(
         db, stmt, MediaOcrCandidate.id, cursor=cursor, limit=limit
     )
 
@@ -177,7 +179,8 @@ def review_queue(
                 raw_text=candidate.raw_text,
                 normalized_number=candidate.normalized_number,
                 confidence=float(candidate.confidence),
-                bbox=candidate.bbox,
+                bbox=OcrBoundingBox.model_validate(candidate.bbox),
+                resolution=candidate.resolution,
                 suggested_engagement=suggested,
                 other_engagements=alternatives,
             )
@@ -270,6 +273,9 @@ def review_decisions(
         # un rattachement machine produisent la même forme en base, seule leur traçabilité
         # diffère.
         classify.project_media_batch(db, sorted(touched), load_ocr_settings(db))
+        # L'arbitrage humain change `attachment_status` (accepté/rejeté/réaffecté) — la
+        # projection de recherche doit suivre dans la même transaction (§3-K).
+        project_media_search(db, sorted(touched))
     db.commit()
 
     remaining = int(

@@ -103,7 +103,8 @@
         "tags": [
           "demo"
         ],
-        "summary": "Régénère le jeu de démo (J2)",
+        "summary": "Régénère le jeu de démo (J2) — `owner` uniquement",
+        "description": "Enqueue `demo_reset` (§3-N.2) puis draine — même patron que `PUT /settings/ocr`\n(§3-E.7) : la file reste l'unique chemin d'écriture, mais la démo veut un résultat\nperceptible dès la réponse HTTP plutôt qu'une attente du prochain tick.",
         "operationId": "demo_seed_api_v1_demo_seed_post",
         "security": [
           {
@@ -2931,6 +2932,38 @@
         ],
         "parameters": [
           {
+            "name": "client_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "required": false,
@@ -3409,7 +3442,7 @@
             }
           },
           {
-            "name": "from_",
+            "name": "from",
             "in": "query",
             "required": false,
             "schema": {
@@ -3421,7 +3454,7 @@
                   "type": "null"
                 }
               ],
-              "title": "From "
+              "title": "From"
             }
           },
           {
@@ -7034,6 +7067,74 @@
         ],
         "title": "MediaSummary"
       },
+      "OcrBoundingBox": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "w": {
+            "type": "number",
+            "title": "W"
+          },
+          "h": {
+            "type": "number",
+            "title": "H"
+          },
+          "quad": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quad"
+          },
+          "image_width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Width"
+          },
+          "image_height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Height"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "OcrBoundingBox",
+        "description": "Boîte de détection — voir docstring de module pour la convention `x/y/w/h`/`quad`."
+      },
       "OcrCandidateOut": {
         "properties": {
           "id": {
@@ -7060,9 +7161,7 @@
             "title": "Confidence"
           },
           "bbox": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Bbox"
+            "$ref": "#/components/schemas/OcrBoundingBox"
           },
           "engine_version": {
             "type": "string",
@@ -8496,9 +8595,19 @@
             "title": "Confidence"
           },
           "bbox": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Bbox"
+            "$ref": "#/components/schemas/OcrBoundingBox"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "review",
+              "abstain",
+              "not_engaged",
+              "accepted",
+              "rejected"
+            ],
+            "title": "Resolution"
           },
           "suggested_engagement": {
             "anyOf": [
@@ -8526,6 +8635,7 @@
           "normalized_number",
           "confidence",
           "bbox",
+          "resolution",
           "suggested_engagement",
           "other_engagements"
         ],

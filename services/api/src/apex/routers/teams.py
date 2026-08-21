@@ -21,8 +21,12 @@ def list_teams(
     cursor: str | None = None,
     limit: int = Query(default=50, le=100),
 ) -> Page[TeamOut]:
-    items, next_cursor = paginate_by_id(db, select(Team), Team.id, cursor=cursor, limit=limit)
-    return Page(items=[TeamOut.model_validate(t) for t in items], next_cursor=next_cursor)
+    items, next_cursor, total = paginate_by_id(
+        db, select(Team), Team.id, cursor=cursor, limit=limit, with_total=True
+    )
+    return Page(
+        items=[TeamOut.model_validate(t) for t in items], next_cursor=next_cursor, total=total
+    )
 
 
 @router.post(

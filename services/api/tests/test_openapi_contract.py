@@ -22,7 +22,9 @@ from __future__ import annotations
 from typing import get_args
 
 from apex.models.media import QUARANTINE_DETAIL_KEYS, QUARANTINE_REASONS, UNATTACHED_REASONS
+from apex.models.search import OCR_RESOLUTIONS
 from apex.schemas.media import AttachmentUnattachedReason, QuarantineDetail, QuarantineReason
+from apex.schemas.review import OcrResolution
 
 
 def test_quarantine_reason_enum_matches_model() -> None:
@@ -48,6 +50,21 @@ def test_attachment_unattached_reason_enum_matches_model() -> None:
     modeled = set(UNATTACHED_REASONS)
     assert exposed == modeled, (
         f"divergence contrat OpenAPI ↔ modèle sur attachment_detail.reason — "
+        f"manquants au contrat : {modeled - exposed} ; fantômes au contrat : {exposed - modeled}"
+    )
+
+
+def test_ocr_resolution_enum_matches_model() -> None:
+    """`OcrResolution` (contrat OpenAPI, `ReviewItem.resolution` / `OcrCandidateOut.resolution`)
+    doit lister exactement les mêmes valeurs que `OCR_RESOLUTIONS` (source de vérité, `CHECK
+    resolution_valid` sur `media_ocr_candidate`) — sans quoi la distinction « pas sûr »
+    (`review`) / « sûr mais incohérent » (`not_engaged`) redeviendrait une déduction fragile
+    côté frontend plutôt qu'une énumération fermée (cf. docstring de `apex.schemas.review`).
+    """
+    exposed = set(get_args(OcrResolution))
+    modeled = set(OCR_RESOLUTIONS)
+    assert exposed == modeled, (
+        f"divergence contrat OpenAPI ↔ modèle sur resolution — "
         f"manquants au contrat : {modeled - exposed} ; fantômes au contrat : {exposed - modeled}"
     )
 

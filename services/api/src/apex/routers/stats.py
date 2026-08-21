@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Query, Security
 from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -70,11 +70,15 @@ def _has_link(*extra: ColumnElement[bool]) -> ColumnElement[bool]:
 def auto_attach_rate(
     user: CurrentUser,
     shooting_id: int | None = None,
-    from_: str | None = None,
+    # `from` est un mot réservé Python : le paramètre Python reste `from_`, mais le contrat
+    # public expose `from` (§ pièges projet, même convention que `shootings.py::list_shootings`
+    # — ne plus fuir un détail d'implémentation Python dans l'API publique, point de contrat
+    # signalé par l'agent frontend J2).
+    from_: str | None = Query(default=None, alias="from"),
     to: str | None = None,
     db: Session = Depends(get_db),
 ) -> AutoAttachRate:
-    date_from = _parse_date(from_, "from_")
+    date_from = _parse_date(from_, "from")
     date_to = _parse_date(to, "to")
 
     conditions: list[ColumnElement[bool]] = [

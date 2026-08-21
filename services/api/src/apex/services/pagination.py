@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, TypeVar
 
 from fastapi import HTTPException
-from sqlalchemy import Select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 T = TypeVar("T")
@@ -22,8 +22,23 @@ def paginate_by_id(
     *,
     cursor: str | None,
     limit: int,
-) -> tuple[list[Any], str | None]:
-    """Applique curseur + `limit+1` à `stmt` (déjà filtrée), renvoie `(items, next_cursor)`."""
+    with_total: bool = False,
+) -> tuple[list[Any], str | None, int | None]:
+    """Applique curseur + `limit+1` à `stmt` (déjà filtrée), renvoie
+    `(items, next_cursor, total)`.
+
+    `total` est `None` sauf si `with_total=True` — dette J1 corrigée ici (§ blocage signalé
+    à l'ouverture du lot recherche : « `Page.total` n'est jamais renseigné, les compteurs
+    d'onglets et de facettes en dépendent »). Calculé par une requête `COUNT(*)` **séparée**,
+    sur le prédicat déjà filtré (avant curseur/tri/limite) : ce n'est jamais une deuxième
+    requête « complète » — un agrégat sur les index déjà posés (`ms_*`, `ix_media_*`, …)
+    reste de l'ordre de la milliseconde même sur les ~8000 lignes du jeu de démo, exactement
+    le même principe que le `remaining` déjà calculé par `routers/review.py`.
+    """
+    total: int | None = None
+    if with_total:
+        total = int(session.execute(select(func.count()).select_from(stmt.subquery())).scalar_one())
+
     if cursor is not None:
         try:
             after_id = int(cursor)
@@ -40,7 +55,7 @@ def paginate_by_id(
     has_more = len(rows) > limit
     items = rows[:limit]
     next_cursor = str(id_column_value(items[-1], id_column)) if has_more and items else None
-    return items, next_cursor
+    return items, next_cursor, total
 
 
 def id_column_value(row: Any, id_column: InstrumentedAttribute[int]) -> int:

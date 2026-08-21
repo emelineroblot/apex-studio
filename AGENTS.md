@@ -76,7 +76,8 @@ uv run alembic upgrade head
 uv run uvicorn apex.main:app --reload --port 8000
 uv run python -m apex.cli worker --loop     # worker : boucle de drainage
 uv run python -m apex.cli worker --once     # un seul tick (utilisé en serverless)
-uv run python -m apex.cli seed --reset      # régénère le jeu de démo
+uv run python -m apex.cli seed --reset      # régénère le jeu de démo (déterministe, ~7 s)
+uv run python -m apex.cli reindex           # reconstruit media_search pour tout le catalogue
 uv run pytest -q
 uv run ruff check . && uv run ruff format --check . && uv run mypy src
 uv export --no-dev --format requirements-txt > requirements.txt

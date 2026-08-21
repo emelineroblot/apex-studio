@@ -39,6 +39,7 @@ from apex.pipeline.ocr.engine import get_engine
 from apex.pipeline.ocr.scoring import extract_readings
 from apex.queue.registry import JobContext, handler
 from apex.services.ocr_settings import load_ocr_settings
+from apex.services.search_projection import project_media
 from apex.services.storage import ObjectNotFoundError, get_storage_client
 
 #: Taille maximale d'un aperçu lu en mémoire — l'aperçu WebP 1600 px pèse ~200 Ko.
@@ -188,6 +189,10 @@ def handle_ocr_media(ctx: JobContext) -> dict[str, Any]:
     session.flush()
 
     projection = classify.project_media(session, media, ocr_settings)
+    # L'OCR peut faire passer `attachment_status` de `shooting_attached` à
+    # `engagement_attached`/`pending_review`/`inconsistent` — la projection de recherche
+    # doit refléter la nouvelle valeur, pas celle écrite à l'ingestion (§3-K).
+    project_media(session, media_id)
     duration_ms = int((time.monotonic() - started) * 1000)
     _event(
         session,

@@ -24,6 +24,7 @@ from apex.models.search import MediaOcrCandidate
 from apex.pipeline.ocr.classify import project_media_batch
 from apex.queue.registry import JobContext, handler
 from apex.services.ocr_settings import load_ocr_settings
+from apex.services.search_projection import project_media_search
 
 #: Taille de tranche : compromis entre le coût des `IN (...)` et la fréquence du heartbeat.
 CHUNK_SIZE = 500
@@ -55,6 +56,11 @@ def handle_reclassify_ocr(ctx: JobContext) -> dict[str, Any]:
         ctx.heartbeat()
         chunk = media_ids[start : start + CHUNK_SIZE]
         result = project_media_batch(session, chunk, ocr_settings)
+        # Un changement de seuil redistribue `attachment_status` sans jamais relancer l'OCR
+        # (§3-J.4) — la projection de recherche doit suivre la même redistribution, sur la
+        # même tranche, sinon `media_search` reste périmée pour tout le catalogue à chaque
+        # `PUT /settings/ocr` (§3-K).
+        project_media_search(session, chunk)
         media_touched += result.media_touched
         attached += result.attached
         detached += result.detached
