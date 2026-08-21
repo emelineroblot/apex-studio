@@ -1,6 +1,6 @@
 ---
 type: pieges
-maj: 2026-08-20
+maj: 2026-08-21
 ---
 
 # Pièges spécifiques à ce projet
@@ -53,3 +53,48 @@ projet de la même stack vivent dans la skill globale `stack-pitfalls`, pas ici.
   boîtier découvert automatiquement à l'ingestion (`owner_user_id IS NULL`). Restreindre à
   l'égalité stricte `owner_user_id == user.id` est un changement d'une ligne dans
   `services/access.py`, à décider en revue produit. *(2026-08-20)*
+
+- **`sqlalchemy.text()` n'associe jamais `:nom` à un bind param quand il est immédiatement
+  suivi d'un second `:`** (regex de reconnaissance, exclusion volontaire pour ne pas capturer
+  l'opérateur de cast Postgres `::` collé à une colonne). `WHERE (:media_ids::bigint[] IS NULL
+  …)` part donc tel quel vers Postgres — `SyntaxError`, reproduit en conditions réelles dans
+  `services/search_projection.py`. → Toujours un **espace** avant `::` sur un paramètre nommé
+  (`:media_ids ::bigint[]`) ; `valeur ::type` reste un cast Postgres valide avec un espace.
+  Piège symétrique : un commentaire SQL `-- ... :mot ...` **à l'intérieur** d'un `text(...)`
+  est scanné par le même regex — une phrase de documentation citant `:nom` comme exemple générique
+  a fait échouer l'exécution (`A value is required for bind parameter`) avant d'être déplacée en
+  commentaire Python, hors de la chaîne SQL. *(2026-08-21)*
+
+- **`insert(Model)`/`update(Model)` (classe ORM) coûtent jusqu'à ~45× plus cher que
+  `insert(Model.__table__)`/`update(Model.__table__)` (Core pur) dès que l'identity map de la
+  session porte déjà beaucoup d'objets** (constaté avec quelques milliers de `Media`/
+  `MediaSeries` déjà chargés) — 4,6 s contre 0,07 s par lot de 500 lignes sur
+  `media_engagement` dans `apex/demo/seed.py` (`cProfile`, dominé par l'attente réseau, aucune
+  relation ORM pourtant définie sur ces modèles). → Pour toute écriture en lot sur une session
+  qui a déjà accumulé beaucoup d'objets (générateurs, imports), passer par `Model.__table__`
+  systématiquement, pas seulement « si ça semble lent ». Voir `docs/wiki/architecture.md`,
+  section générateur de démo, pour le détail chiffré. *(2026-08-21)*
+
+- **`func.unnest(colonne).table_valued("v", joins_implicitly=True)` sans `.render_derived()`
+  référence une colonne `anon_1.v` que Postgres ne connaît pas** — SQLAlchemy rend
+  `unnest(...) AS anon_1` (sans liste de colonnes dérivées) tout en générant `SELECT anon_1.v`
+  dans la requête, provoquant `UndefinedColumn: anon_1.v` (reproduit en conditions réelles dans
+  `services/facets.py`, facettes tableau team/driver/car_number). → Toujours chaîner
+  `.render_derived()`, qui force le rendu `AS anon_1(v)`. *(2026-08-21)*
+
+- **La liste `TRUNCATE` du plan (§3-N.2, réinitialisation du jeu de démo) omet la table
+  `circuit`** — un second `reset=True` échoue en `UniqueViolation` sur `circuit.name`, les 8
+  circuits réels du catalogue n'étant jamais effacés (reproduit en conditions réelles,
+  `tests/demo/test_seed.py::TestDeterminism`). → Corrigé dans
+  `apex/demo/seed.py::_RESET_TABLES` (ajout de `circuit`) ; à vérifier une nouvelle fois si une
+  future table de référence rejoint le catalogue du jeu de démo. *(2026-08-21)*
+
+- **`require_owner` ne protège aucune route destructrice de ce projet, tant que
+  `GET /demo/accounts` est public** — l'endpoint de self-service de la démo renvoie les
+  identifiants en clair, par conception. Le cloisonnement de `POST /demo/seed?reset=true`
+  (`TRUNCATE` de 25 tables) se résumait donc à trois appels : lire les identifiants, se
+  connecter, détruire. → Toute route destructrice se protège par un **secret serveur jamais
+  publié** (`X-Worker-Secret`, même patron que `POST /jobs/tick`), pas par un rôle ; et son
+  travail sort de la requête (`202 {job_id}` + enqueue) plutôt que de drainer 60 s de façon
+  synchrone sur un pool de 2+3 connexions. **À rappeler au J3** : la réinitialisation nocturne
+  et la livraison ZIP relèvent exactement du même patron. *(2026-08-21)*

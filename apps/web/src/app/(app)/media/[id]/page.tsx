@@ -4,10 +4,14 @@ import { use, useState } from "react";
 import Link from "next/link";
 import * as mediaApi from "@/lib/api/resources/media";
 import * as shootingsApi from "@/lib/api/resources/shootings";
+import * as reviewApi from "@/lib/api/resources/review";
+import * as settingsApi from "@/lib/api/resources/settings";
 import { useAsync } from "@/hooks/useAsync";
 import { friendlyErrorMessage } from "@/lib/api/errors";
 import { formatBytes, formatDateTime } from "@/lib/format";
-import { AttachmentStatusBadge, IngestStatusBadge } from "@/components/media/StatusBadges";
+import { AttachmentStatusBadge, IngestStatusBadge, SimulatedBadge } from "@/components/media/StatusBadges";
+import { OcrBadge } from "@/components/media/OcrBadge";
+import { OCR_RESOLUTION_LABELS } from "@/lib/labels";
 import { AuthImage } from "@/components/media/AuthImage";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -24,6 +28,8 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
 
   const { data: media, loading, error, reload } = useAsync(() => mediaApi.get(mediaId), [mediaId]);
   const { data: shootingsPage } = useAsync(() => shootingsApi.list({ limit: 100 }), []);
+  const { data: ocr } = useAsync(() => reviewApi.ocrCandidates(mediaId), [mediaId]);
+  const { data: ocrSettings } = useAsync(() => settingsApi.getOcr(), []);
   const [attachTarget, setAttachTarget] = useState("");
   const [attaching, setAttaching] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -58,6 +64,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
             description={`Média #${media.id} · ${formatBytes(media.byte_size)}`}
             actions={
               <>
+                {media.is_simulated ? <SimulatedBadge /> : null}
                 <IngestStatusBadge status={media.ingest_status} />
                 <AttachmentStatusBadge status={media.attachment_status} />
               </>
@@ -111,6 +118,22 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
                       <Notice tone="danger">{attachError}</Notice>
                     </div>
                   ) : null}
+                </Card>
+              ) : null}
+
+              {ocr && ocr.candidates.length > 0 ? (
+                <Card>
+                  <h2 className="mb-3 text-sm font-semibold text-ink-900">Lectures OCR (§ J2)</h2>
+                  <ul className="flex flex-col gap-2">
+                    {ocr.candidates.map((c) => (
+                      <li key={c.id} className="flex flex-wrap items-center gap-2 text-sm text-ink-700">
+                        <span className="font-mono">{c.raw_text}</span>
+                        {c.normalized_number ? <span>→ n°{c.normalized_number}</span> : null}
+                        <OcrBadge confidence={c.confidence} thresholds={{ high: ocrSettings?.high ?? 0.8, low: ocrSettings?.low ?? 0.45 }} />
+                        <span className="text-xs text-ink-400">{OCR_RESOLUTION_LABELS[c.resolution]}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </Card>
               ) : null}
 

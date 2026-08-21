@@ -1,9 +1,26 @@
 ---
 type: journal
-maj: 2026-08-20
+maj: 2026-08-21
 ---
 
 # Journal des runs
+
+## 2026-08-21 — J2, intelligence et recherche (`feature/ocr-recherche`)
+Livré : lecture du numéro de course par OCR embarqué (RapidOCR/ONNX, aucun service tiers), seuils
+configurables avec re-projection des candidats bruts sans ré-inférence, file de validation
+humaine, recherche à facettes et plein texte en PostgreSQL pur, collections, et un générateur de
+jeu de démonstration à ~8 400 médias. 8 critères d'acceptation sur 8, 3 bloquants de revue
+corrigés.
+Le fait notable : la valeur du jalon n'est pas le taux d'OCR mais la **frontière DOE rendue
+opposable** — le modèle ne produit qu'un texte, une confiance et un quadrilatère ; trois tests
+(moteur factice, moteur qui lève, analyse d'AST) interdisent au métier d'en dépendre.
+Deuxième fait notable : l'évaluation offline a corrigé le plan sur trois points, dont le plus
+important est méthodologique — un jeu de test simulant un plateau de 168 voitures au lieu de 44
+mesurait autre chose que le produit (92,2 % contre 98,0 %).
+Blackboard d'origine : `.agent-team/` (éphémère).
+Détail : `architecture.md#frontière-doe-de-locr--le-modèle-produit-un-texte-et-un-nombre-jamais-un-rattachement`,
+`architecture.md#calibration-des-seuils--ce-que-lévaluation-offline-a-corrigé-du-plan` et
+`architecture.md#visibilité-par-défaut-dune-liste-de-médias--une-source-unique-paramétrée-par-colonnes`.
 
 ## 2026-08-20 — J1, socle et ingestion (`feature/socle-ingestion`)
 Livré : modèle de données complet des 3 jalons (28 tables, une seule révision Alembic),

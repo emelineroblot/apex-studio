@@ -9,9 +9,25 @@ Matrice appliquée (§3-I) :
 
 Convention de fuite d'information : une ressource hors périmètre renvoie **404**, jamais
 `403` — un `403` révélerait son existence à un rôle qui ne devrait pas la voir (§3-I).
+
+## Second usage du module : visibilité par défaut des listes de médias
+
+En plus du cloisonnement par rôle ci-dessus, ce module porte aussi les prédicats de
+**visibilité par défaut** qu'une liste de médias applique quel que soit le rôle (séries
+repliées, doublons exclus) — `series_collapse_clause`/`exclude_duplicates_clause`
+ci-dessous. Ce n'est pas du cloisonnement de rôle à proprement parler, mais la même
+discipline de « porte unique » s'applique : `routers/media.py::list_media` avait ajouté en
+clôture de J1 une clause de défense (un média sans shooting ne peut appartenir à aucune
+série visible, quelle que soit la fraîcheur de `series_id`/`is_series_representative` en
+base) ; `services/facets.py::_base_predicates` a **réimplémenté** la même règle en J2 sans
+la reprendre, masquant structurellement le bac « à rattacher » de `GET /search` (§ constat
+d'intégration live J2, `.agent-team/implementation.md`). Facteur commun ici pour qu'une
+troisième route ne puisse pas réintroduire la même divergence par simple oubli.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import ColumnElement, Select, or_, select
@@ -85,19 +101,35 @@ def assert_can_write_engagements(session: Session, user: AppUser, shooting_id: i
         raise _not_found("Shooting")
 
 
-def media_visibility_clause(user: AppUser) -> ColumnElement[bool] | None:
-    """Condition SQL à `.where()` sur une requête `Media` — jamais une liste Python.
+def media_visibility_clause_for(
+    user: AppUser, *, shooting_id: Any, uploaded_by: Any
+) -> ColumnElement[bool] | None:
+    """Cloisonnement média — paramétré par colonnes (revue J2, 🟠 n°4), même patron que
+    `series_collapse_clause`/`exclude_duplicates_clause` ci-dessous : `services/facets.py`
+    portait sa **propre** réimplémentation de cette règle (`visibility_clause`), la seule
+    divergence du projet vis-à-vis de l'invariant « une seule porte » — plus grave ici
+    qu'ailleurs puisque c'est du cloisonnement de rôle, pas juste une visibilité par défaut.
+    Un paramètre `model: type` unique n'apporterait qu'une fausse généricité (`Media` et
+    `MediaSearch` ne sont pas le même modèle SQLAlchemy, cf. commentaire plus bas) : passer
+    les deux colonnes une par une rend un oubli impossible.
 
-    `owner` : aucune restriction. `photographer` : le média appartient à un de ses
-    shootings, **ou** il l'a lui-même déposé (bac « à rattacher » avant tout rattachement,
+    `owner` : aucune restriction. `photographer` : la ligne appartient à un de ses
+    shootings, **ou** il l'a lui-même déposée (bac « à rattacher » avant tout rattachement,
     où `shooting_id IS NULL`) — sans cette clause, un photographe perdrait de vue ses
     propres imports tant qu'ils ne sont pas rattachés.
     """
     if is_owner(user):
         return None
-    return or_(
-        Media.shooting_id.in_(visible_shooting_ids(user)),
-        Media.uploaded_by == user.id,
+    return or_(shooting_id.in_(visible_shooting_ids(user)), uploaded_by == user.id)
+
+
+def media_visibility_clause(user: AppUser) -> ColumnElement[bool] | None:
+    """Condition SQL à `.where()` sur une requête `Media` — jamais une liste Python.
+
+    Enveloppe de `media_visibility_clause_for`, colonnes `Media` — voir sa docstring.
+    """
+    return media_visibility_clause_for(
+        user, shooting_id=Media.shooting_id, uploaded_by=Media.uploaded_by
     )
 
 
@@ -179,3 +211,46 @@ def assert_can_mutate_camera(session: Session, user: AppUser, camera: Camera) ->
     if camera.id in visible_ids:
         return
     raise _not_found("Boîtier")
+
+
+# --- Visibilité par défaut des listes (séries repliées, doublons) — §3-G / §3-K.2 -------
+#
+# Colonnes passées en argument (pas un modèle) : `Media` (table source, `routers/media.py`)
+# et `MediaSearch` (projection de recherche, `services/facets.py`) portent les mêmes noms
+# de colonnes mais ne sont pas le même modèle SQLAlchemy — un paramètre `model: type` unique
+# n'apporterait qu'une fausse généricité. Passer les `InstrumentedAttribute` un par un est ce
+# qui rend un oubli impossible : chaque appelant doit fournir explicitement les trois/un
+# colonnes, il ne peut pas les « oublier en silence » comme la clause OR inline le permettait.
+
+
+def series_collapse_clause(
+    *, series_id: Any, is_series_representative: Any, shooting_id: Any
+) -> ColumnElement[bool]:
+    """« Une rafale est regroupée en série et n'affiche qu'un représentant » (§3-G), pour
+    une liste en mode `series=collapsed` (le défaut) : hors série (`series_id IS NULL`),
+    ou représentant de sa série (`is_series_representative`), ou **sans shooting**
+    (`shooting_id IS NULL`).
+
+    Cette troisième branche est une défense en profondeur, indépendante du correctif
+    source dans `reattach_camera`/le pipeline de séries (§E.6) : un média sans shooting ne
+    peut légitimement appartenir à aucune série, quelle que soit la fraîcheur de
+    `series_id`/`is_series_representative` en base (ex. un recalcul de rattachement qui
+    aurait laissé le média orphelin sans requalifier sa série). Elle rend structurellement
+    impossible qu'un tel orphelin — notamment tout le bac « à rattacher »,
+    `shooting_id IS NULL` par construction — soit masqué par le collapse : c'est
+    exactement la garantie que `services/facets.py::_base_predicates` avait perdue en la
+    réimplémentant sans elle (intégration live J2).
+    """
+    return or_(
+        series_id.is_(None),
+        is_series_representative.is_(True),
+        shooting_id.is_(None),
+    )
+
+
+def exclude_duplicates_clause(duplicate_of_media_id: Any) -> ColumnElement[bool]:
+    """« Deux fichiers identiques sont dédoublonnés » (critère d'acceptation J1) — le
+    prédicat par défaut de toute liste de médias. Un doublon reste consultable
+    individuellement (`GET /media/{id}`) quel que soit ce filtre.
+    """
+    return duplicate_of_media_id.is_(None)

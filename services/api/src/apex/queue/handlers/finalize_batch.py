@@ -13,6 +13,7 @@ from apex.models.media import Media, UploadBatch
 from apex.pipeline.series import regroup_bursts_for_shooting
 from apex.queue.registry import JobContext, handler
 from apex.services.app_settings import get_burst_gap_seconds, get_phash_max_distance
+from apex.services.search_projection import project_media_search_for_shooting
 
 TERMINAL_INGEST_STATUSES = ("ingested", "quarantined")
 
@@ -59,6 +60,10 @@ def handle_finalize_batch(ctx: JobContext) -> dict[str, Any]:
             burst_gap_seconds=burst_gap,
             phash_max_distance=phash_max_distance,
         )
+        # Le regroupement efface/reconstruit toutes les séries du shooting :
+        # `is_series_representative` a pu changer pour n'importe lequel de ses médias, pas
+        # seulement ceux de ce lot — réindexation à l'échelle du shooting (§3-K).
+        project_media_search_for_shooting(session, shooting_id)
 
     closed = False
     if (

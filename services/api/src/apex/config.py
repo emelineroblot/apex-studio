@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # --- OCR (J2) ---
     ocr_model_dir: str = "./models"
 
+    # --- Jeu de démo (J2, §3-N.1) --- : ~300 photos réelles libres de droits, **non
+    # encore sourcées** au moment de ce lot (§ brief, « seul prérequis externe, non
+    # bloquant pour le code »). Absent ou vide => le générateur se limite au jeu
+    # synthétique, sans échouer (`demo/seed.py::_ingest_real_photos`).
+    real_photos_dir: str = "./demo-photos"
+
     # --- Limites ---
     max_upload_bytes: int = 26_214_400
     default_shooting_quota_bytes: int = 2_147_483_648

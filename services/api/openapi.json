@@ -103,13 +103,9 @@
         "tags": [
           "demo"
         ],
-        "summary": "Régénère le jeu de démo (J2)",
+        "summary": "Régénère le jeu de démo (J2) — secret serveur (`WORKER_SECRET`), pas un rôle",
+        "description": "Enqueue `demo_reset` (§3-N.2) puis répond immédiatement — la file reste l'unique\nchemin d'écriture, un tick (`POST /jobs/tick`, `apex.cli worker --loop`) le draine.\n\n**Revue J2 (🔴 n°3)** : cette route TRUNCATE 25 tables. `require_owner` (JWT) ne protège\nrien ici puisque `GET /demo/accounts` est **public** et publie le mot de passe `owner`\nen clair (design assumé — self-service de connexion pour la démo, §3-I) : trois appels\nHTTP suffisaient à effacer la base en pleine démonstration. Découplé de l'identité du\ndéclencheur — même patron que `POST /jobs/tick` (`routers/jobs.py`) : un secret serveur\n(`WORKER_SECRET`), jamais exposé au navigateur, jamais un JWT.\n\nLe drainage synchrone dans la requête a également été retiré (même revue) : il exécutait\nn'importe quel job déjà en file — y compris des inférences OCR — dans le budget de la\nrequête HTTP (60 s, alors que le pool ne compte que 2+3 connexions), rendant l'API\nindisponible sous quelques appels concurrents. `DemoResetResponse` porte déjà `job_id` :\nla redistribution est visible au prochain tick, jamais bloquante pour l'appelant.",
         "operationId": "demo_seed_api_v1_demo_seed_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
         "parameters": [
           {
             "name": "reset",
@@ -120,10 +116,19 @@
               "default": false,
               "title": "Reset"
             }
+          },
+          {
+            "name": "X-Worker-Secret",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Worker-Secret"
+            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -2117,6 +2122,7 @@
           "media"
         ],
         "summary": "Candidats OCR bruts du média (J2) — score et boîte, affichés dans l'UI",
+        "description": "Les candidats **bruts**, tels que persistés : c'est la matière première du jalon.\n\nCe que le modèle a lu, avec quelle confiance et à quel endroit de l'image, est visible\ndans l'UI — pas seulement la conclusion. C'est ce qui rend le score explicable et ce\nqui permet de rejouer une classification sans jamais relancer une inférence.",
         "operationId": "get_media_ocr_api_v1_media__media_id__ocr_get",
         "security": [
           {
@@ -2640,6 +2646,22 @@
             }
           },
           {
+            "name": "is_simulated",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Simulated"
+            }
+          },
+          {
             "name": "series",
             "in": "query",
             "required": false,
@@ -2929,6 +2951,38 @@
           }
         ],
         "parameters": [
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
           {
             "name": "cursor",
             "in": "query",
@@ -3408,7 +3462,7 @@
             }
           },
           {
-            "name": "from_",
+            "name": "from",
             "in": "query",
             "required": false,
             "schema": {
@@ -3420,7 +3474,7 @@
                   "type": "null"
                 }
               ],
-              "title": "From "
+              "title": "From"
             }
           },
           {
@@ -4617,6 +4671,53 @@
           "rate": {
             "type": "number",
             "title": "Rate"
+          },
+          "real": {
+            "$ref": "#/components/schemas/AutoAttachRatePopulation"
+          },
+          "simulated": {
+            "$ref": "#/components/schemas/AutoAttachRatePopulation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "auto_time",
+          "auto_ocr",
+          "human",
+          "unattached",
+          "rate",
+          "real",
+          "simulated"
+        ],
+        "title": "AutoAttachRate",
+        "description": "Champs de tête : agrégat **toutes origines confondues** (rétrocompatible avec la\nforme d'origine du contrat). `real`/`simulated` (revue J2, 🟠 n°1, §3-N.1 du plan)\nventilent le même calcul par `media.is_simulated` — un tableau de bord ne doit jamais\nannoncer un taux sans pouvoir dire sur quelle population il porte."
+      },
+      "AutoAttachRatePopulation": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "auto_time": {
+            "type": "integer",
+            "title": "Auto Time"
+          },
+          "auto_ocr": {
+            "type": "integer",
+            "title": "Auto Ocr"
+          },
+          "human": {
+            "type": "integer",
+            "title": "Human"
+          },
+          "unattached": {
+            "type": "integer",
+            "title": "Unattached"
+          },
+          "rate": {
+            "type": "number",
+            "title": "Rate"
           }
         },
         "type": "object",
@@ -4628,7 +4729,8 @@
           "unattached",
           "rate"
         ],
-        "title": "AutoAttachRate"
+        "title": "AutoAttachRatePopulation",
+        "description": "Même décompte que `AutoAttachRate`, restreint à une seule population (réel ou simulé)."
       },
       "BatchCloseResponse": {
         "properties": {
@@ -5335,14 +5437,12 @@
           "from_search": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/FromSearchFilters"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "From Search"
+            ]
           }
         },
         "type": "object",
@@ -6170,6 +6270,238 @@
         ],
         "title": "FileUploadResponse",
         "description": "`duplicate=true` signifie que l'`Idempotency-Key` a déjà été vue (rejeu, §3-F.4.2)."
+      },
+      "FromSearchFilters": {
+        "properties": {
+          "q": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q"
+          },
+          "shooting_id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shooting Id"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "team_id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "driver_id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Driver Id"
+          },
+          "car_number": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Number"
+          },
+          "circuit_id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Circuit Id"
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Id"
+          },
+          "lens": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lens"
+          },
+          "iso_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iso Min"
+          },
+          "iso_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iso Max"
+          },
+          "focal_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focal Min"
+          },
+          "focal_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focal Max"
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date From"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date To"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "is_simulated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Simulated"
+          },
+          "series": {
+            "type": "string",
+            "enum": [
+              "collapsed",
+              "all"
+            ],
+            "title": "Series",
+            "default": "collapsed"
+          }
+        },
+        "type": "object",
+        "title": "FromSearchFilters",
+        "description": "`from_search` de `POST /collections/{id}/items` — **mêmes paramètres** que\n`GET /search` (§3-K), en JSON plutôt qu'en query string.\n\nRevue J2 (🟡 12) : remplace un `dict[str, Any]` non validé. Un champ mal typé (ex.\n`shooting_id` envoyé comme entier plutôt que liste) levait auparavant une exception SQL\nnon capturée en aval de `services/facets.py` — `500` au lieu d'un `422` Pydantic normal."
       },
       "HTTPValidationError": {
         "properties": {
@@ -7033,6 +7365,74 @@
         ],
         "title": "MediaSummary"
       },
+      "OcrBoundingBox": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "w": {
+            "type": "number",
+            "title": "W"
+          },
+          "h": {
+            "type": "number",
+            "title": "H"
+          },
+          "quad": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quad"
+          },
+          "image_width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Width"
+          },
+          "image_height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Height"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "OcrBoundingBox",
+        "description": "Boîte de détection — voir docstring de module pour la convention `x/y/w/h`/`quad`."
+      },
       "OcrCandidateOut": {
         "properties": {
           "id": {
@@ -7059,9 +7459,7 @@
             "title": "Confidence"
           },
           "bbox": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Bbox"
+            "$ref": "#/components/schemas/OcrBoundingBox"
           },
           "engine_version": {
             "type": "string",
@@ -8425,7 +8823,19 @@
               "$ref": "#/components/schemas/ReviewDecision"
             },
             "type": "array",
+            "maxItems": 500,
             "title": "Decisions"
+          },
+          "shooting_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shooting Id"
           }
         },
         "type": "object",
@@ -8495,9 +8905,19 @@
             "title": "Confidence"
           },
           "bbox": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Bbox"
+            "$ref": "#/components/schemas/OcrBoundingBox"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "review",
+              "abstain",
+              "not_engaged",
+              "accepted",
+              "rejected"
+            ],
+            "title": "Resolution"
           },
           "suggested_engagement": {
             "anyOf": [
@@ -8525,6 +8945,7 @@
           "normalized_number",
           "confidence",
           "bbox",
+          "resolution",
           "suggested_engagement",
           "other_engagements"
         ],

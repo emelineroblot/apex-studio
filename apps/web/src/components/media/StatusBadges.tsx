@@ -32,3 +32,19 @@ export function QuarantineReasonBadge({ reason }: { reason: string | null }) {
     </Badge>
   );
 }
+
+/**
+ * `media.is_simulated` (§3-N.1 du plan) — « on ne fait pas passer un jeu généré pour du
+ * traitement réel, c'est un argument de crédibilité, pas un aveu ». Revue J2 🟠1 : le champ
+ * traversait toute la pile sans jamais être lu par un composant de rendu. N'affiche rien
+ * pour un média réel (`false`) — le badge n'existe que pour marquer l'exception.
+ */
+export function SimulatedBadge({ className }: { className?: string }) {
+  return (
+    <span title="Média généré pour peupler le jeu de démonstration — pas un traitement réel du pipeline.">
+      <Badge tone="accent" className={className}>
+        Simulé
+      </Badge>
+    </span>
+  );
+}

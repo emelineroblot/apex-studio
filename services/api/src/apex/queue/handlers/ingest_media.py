@@ -15,6 +15,7 @@ from apex.models.media import Media
 from apex.pipeline.ingest import run_ingest_media
 from apex.queue.enqueue import enqueue
 from apex.queue.registry import JobContext, handler
+from apex.services.search_projection import project_media
 from apex.services.storage import get_storage_client
 
 
@@ -51,6 +52,11 @@ def handle_ingest_media(ctx: JobContext) -> dict[str, Any]:
         ctx.session, media, storage, job_id=ctx.job.id, studio_name=settings.studio_name
     )
 
+    # §3-F.1, étape 8 (« index ») : la ligne `media_search` est écrite ici, quelle que soit
+    # l'issue (ingéré, quarantaine, doublon) — un média absent de la projection est un média
+    # introuvable en recherche, invariant signalé par l'agent OCR en sortie de son lot.
+    project_media(ctx.session, media.id)
+
     # Enqueue transactionnel (§3-E.4.2) : recalcule les compteurs du lot, regroupe les
     # rafales — un rejeu par média successif est absorbé par le dédoublonnage d'enqueue.
     enqueue(
@@ -60,6 +66,23 @@ def handle_ingest_media(ctx: JobContext) -> dict[str, Any]:
         dedupe_key=f"batch:{media.batch_id}",
         priority=120,
     )
+
+    # §3-F.1, étape 9 (J2) : l'OCR a son propre job — plus coûteux, il échoue différemment
+    # et doit rester relançable seul. On ne l'enqueue que si le média a rejoint un
+    # shooting : sans table d'engagements, un numéro lu ne serait ni rattachable ni
+    # déclarable incohérent (voir `handlers/ocr_media.py`).
+    if (
+        outcome.ingest_status == "ingested"
+        and outcome.duplicate_of_media_id is None
+        and media.shooting_id is not None
+    ):
+        enqueue(
+            ctx.session,
+            "ocr_media",
+            {"media_id": media.id},
+            dedupe_key=f"ocr:{media.id}",
+            priority=110,
+        )
 
     return {
         "media_id": outcome.media_id,

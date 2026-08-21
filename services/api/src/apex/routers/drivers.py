@@ -21,8 +21,12 @@ def list_drivers(
     cursor: str | None = None,
     limit: int = Query(default=50, le=100),
 ) -> Page[DriverOut]:
-    items, next_cursor = paginate_by_id(db, select(Driver), Driver.id, cursor=cursor, limit=limit)
-    return Page(items=[DriverOut.model_validate(d) for d in items], next_cursor=next_cursor)
+    items, next_cursor, total = paginate_by_id(
+        db, select(Driver), Driver.id, cursor=cursor, limit=limit, with_total=True
+    )
+    return Page(
+        items=[DriverOut.model_validate(d) for d in items], next_cursor=next_cursor, total=total
+    )
 
 
 @router.post(

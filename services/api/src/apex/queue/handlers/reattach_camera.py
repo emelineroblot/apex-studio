@@ -23,11 +23,19 @@ from sqlalchemy import select
 
 from apex.models.catalog import Camera
 from apex.models.media import Media
+from apex.models.search import MediaOcrCandidate
 from apex.pipeline import attach_time
 from apex.pipeline.exif import compute_shot_at
+from apex.pipeline.ocr.classify import project_media_batch
 from apex.pipeline.series import regroup_bursts_for_shooting
+from apex.queue.enqueue import enqueue
 from apex.queue.registry import JobContext, handler
 from apex.services.app_settings import get_burst_gap_seconds, get_phash_max_distance
+from apex.services.ocr_settings import load_ocr_settings
+from apex.services.search_projection import (
+    project_media_search,
+    project_media_search_for_shooting,
+)
 
 
 @handler("reattach_camera", max_attempts=3)
@@ -57,6 +65,11 @@ def handle_reattach_camera(ctx: JobContext) -> dict[str, Any]:
 
     reattached = 0
     affected_shooting_ids: set[int] = set()
+    # J2 : médias qui changent de shooting — leurs candidats OCR ont été résolus contre la
+    # table des engagements de l'**ancien** shooting et n'ont plus de sens. On les
+    # re-projette (déterministe, sans ré-inférence) et on ne relance le modèle que pour
+    # ceux qui n'ont encore jamais été lus.
+    moved_media_ids: list[int] = []
     for media in medias:
         previous_shooting_id = media.shooting_id
         previous_attachment_status = media.attachment_status
@@ -72,6 +85,7 @@ def handle_reattach_camera(ctx: JobContext) -> dict[str, Any]:
             # (son `shooting_id` a déjà changé) s'il devient `unattached`.
             media.series_id = None
             media.is_series_representative = False
+            moved_media_ids.append(media.id)
             if previous_shooting_id is not None:
                 affected_shooting_ids.add(previous_shooting_id)
             if media.shooting_id is not None:
@@ -85,6 +99,37 @@ def handle_reattach_camera(ctx: JobContext) -> dict[str, Any]:
 
     session.flush()
 
+    ocr_enqueued = 0
+    if moved_media_ids:
+        ocr_settings = load_ocr_settings(session)
+        # Re-projection déterministe : un média qui a quitté son shooting perd ses
+        # rattachements OCR ; un média qui en rejoint un voit ses candidats re-confrontés
+        # à la nouvelle table des engagements. Aucune image n'est relue ici.
+        project_media_batch(session, moved_media_ids, ocr_settings)
+
+        already_read = set(
+            session.execute(
+                select(MediaOcrCandidate.media_id).where(
+                    MediaOcrCandidate.media_id.in_(moved_media_ids)
+                )
+            ).scalars()
+        )
+        for media_id in moved_media_ids:
+            moved = session.get(Media, media_id)
+            if moved is None or moved.shooting_id is None or media_id in already_read:
+                continue
+            # Jamais lu jusqu'ici (il était dans le bac « à rattacher ») : c'est le seul
+            # cas qui justifie une inférence.
+            if enqueue(
+                session,
+                "ocr_media",
+                {"media_id": media_id},
+                dedupe_key=f"ocr:{media_id}",
+                priority=110,
+            ):
+                ocr_enqueued += 1
+        session.flush()
+
     if affected_shooting_ids:
         burst_gap = get_burst_gap_seconds(session)
         phash_max_distance = get_phash_max_distance(session)
@@ -97,4 +142,15 @@ def handle_reattach_camera(ctx: JobContext) -> dict[str, Any]:
             )
         session.flush()
 
-    return {"checked": len(medias), "reattached": reattached}
+    # §3-F.3 : `shot_at` et `attachment_status` viennent de bouger pour tout le parc du
+    # boîtier — la projection de recherche doit suivre, sans quoi le recalage rend des
+    # médias introuvables plutôt que re-rattachés (constat laissé par l'agent OCR).
+    if medias:
+        project_media_search(session, [m.id for m in medias])
+    # Le regroupement des rafales (ci-dessus) touche potentiellement des médias d'un autre
+    # boîtier du **même** shooting (il efface/reconstruit toutes les séries du shooting) :
+    # une réindexation par shooting complet, pas seulement par les médias de ce boîtier.
+    for shooting_id in affected_shooting_ids:
+        project_media_search_for_shooting(session, shooting_id)
+
+    return {"checked": len(medias), "reattached": reattached, "ocr_enqueued": ocr_enqueued}

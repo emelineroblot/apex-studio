@@ -1,5 +1,6 @@
 import type { IngestStatus, MediaOut, MediaSummary, Page } from "@/lib/api/types";
 import { media, mediaThumbUrl, toSummary } from "@/lib/api/fixtures/db";
+import { searchIndex } from "@/lib/api/fixtures/searchIndex";
 import { ApiError } from "@/lib/api/errors";
 import { delay, notFound, paginate } from "@/lib/api/fixtures/utils";
 
@@ -64,9 +65,68 @@ export async function list(
   return { ...page, items: page.items.map(toSummary) };
 }
 
+/**
+ * Reconstruit une fiche minimale pour un id du **lot synthétique de recherche**
+ * (`fixtures/searchIndex.ts`, ids ≥ 2001) : ces médias n'existent que dans l'index de
+ * recherche (volume, § « le jeu de démo comptera ~8 000 médias »), jamais dans `db.media`
+ * — sans ce repli, un clic depuis `/search` ou une collection composée sur un de ces
+ * résultats renverrait un `404` trompeur (« média introuvable ») pour un média qui existe
+ * bel et bien dans la démo. Les champs indisponibles côté index (EXIF détaillé, séquence
+ * d'événements réelle…) sont des valeurs plausibles, pas des données mesurées.
+ */
+function fromSearchIndex(id: number): MediaOut | null {
+  const entry = searchIndex().find((e) => e.id === id);
+  if (!entry) return null;
+  return {
+    id: entry.id,
+    batch_id: 1,
+    original_filename: `sim-${entry.id}.jpg`,
+    byte_size: 6_000_000,
+    mime: "image/jpeg",
+    width: 6000,
+    height: 4000,
+    shot_at_exif: entry.shot_at ? entry.shot_at.replace("Z", "") : null,
+    shot_at: entry.shot_at,
+    exif: {
+      camera_id: entry.camera_id,
+      lens_model: entry.lens,
+      iso: entry.iso,
+      shutter_speed_sec: null,
+      shutter_speed_label: null,
+      aperture: null,
+      focal_length: entry.focal_length,
+      gps_lat: null,
+      gps_lon: null,
+      exif_raw: null,
+    },
+    phash: null,
+    sharpness: null,
+    series_id: entry.series_id,
+    is_series_representative: entry.is_series_representative,
+    duplicate_of_media_id: entry.duplicate_of_media_id,
+    ingest_status: entry.ingest_status,
+    quarantine_reason: null,
+    quarantine_detail: null,
+    attachment_status: entry.attachment_status,
+    attachment_source: entry.attachment_status === "unattached" ? null : "pipeline_time",
+    attachment_detail: null,
+    shooting_id: entry.shooting_id,
+    is_simulated: entry.is_simulated,
+    caption: entry.caption,
+    keywords: entry.keywords,
+    engagements: entry.car_numbers.map((carNumber, idx) => ({
+      engagement_id: -(entry.id * 10 + idx), // synthétique, hors table des engagements réelle.
+      car_number: carNumber,
+      source: "ocr",
+      confidence: null,
+    })),
+    events: ["upload", "integrity", "exif", "hash", "attach_time", "derivatives"],
+  };
+}
+
 export async function get(id: number): Promise<MediaOut> {
   await delay(150);
-  const found = media.find((m) => m.id === id);
+  const found = media.find((m) => m.id === id) ?? fromSearchIndex(id);
   if (!found) notFound("Ce média");
   return found;
 }
@@ -80,11 +140,12 @@ export function previewUrl(id: number): string {
 /** Vignette d'un média identifié par id seul — `MediaOut` (fiche détaillée) n'expose pas
  * `thumb_url` (seul `MediaSummary`, la liste, le fait) : utilisé pour afficher la vignette
  * du **maître** d'un doublon dans l'onglet « Doublons » (`DuplicatePairCard`), où seule
- * `MediaOut` du maître est disponible côté appelant. */
+ * `MediaOut` du maître est disponible côté appelant — et pour les items de collection
+ * composés depuis le lot synthétique de `/search` (§ `fromSearchIndex`). */
 export function thumbUrl(id: number): string {
   const found = media.find((m) => m.id === id);
-  if (!found) return "";
-  return mediaThumbUrl(found);
+  if (found) return mediaThumbUrl(found);
+  return searchIndex().find((e) => e.id === id)?.thumb_url ?? "";
 }
 
 export async function attach(id: number, shootingId: number): Promise<MediaOut> {

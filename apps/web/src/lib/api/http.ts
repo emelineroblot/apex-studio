@@ -9,9 +9,16 @@ import { API_BASE_URL, API_PREFIX } from "@/lib/env";
 import { getToken, clearSession } from "@/lib/auth/session";
 import { ApiError, type ApiErrorBody } from "@/lib/api/errors";
 
+type QueryValue = string | number | boolean | undefined | null;
+
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
-  query?: Record<string, string | number | boolean | undefined | null>;
+  /**
+   * Une valeur `Array` produit **une clé répétée** (`shooting_id=1&shooting_id=2`) — c'est
+   * la convention FastAPI/`Query(list[int])` du contrat J2 (§ facettes multi-sélection) :
+   * `URLSearchParams.append`, jamais `.set`, sinon seule la dernière valeur survivrait.
+   */
+  query?: Record<string, QueryValue | QueryValue[]>;
   json?: unknown;
   body?: BodyInit;
   headers?: Record<string, string>;
@@ -23,7 +30,15 @@ function buildUrl(path: string, query?: RequestOptions["query"]): string {
   const url = new URL(`${API_PREFIX}${path}`, API_BASE_URL);
   if (query) {
     for (const [key, value] of Object.entries(query)) {
-      if (value === undefined || value === null || value === "") continue;
+      if (value === undefined || value === null) continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item === undefined || item === null || item === "") continue;
+          url.searchParams.append(key, String(item));
+        }
+        continue;
+      }
+      if (value === "") continue;
       url.searchParams.set(key, String(value));
     }
   }

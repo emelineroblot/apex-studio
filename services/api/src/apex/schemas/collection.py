@@ -1,9 +1,11 @@
 """Schémas `collection`, `collection_item` (J2)."""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+from apex.schemas.search import FromSearchFilters
 
 CollectionStatus = Literal["draft", "published", "closed"]
 
@@ -40,7 +42,7 @@ class CollectionAddItemsRequest(BaseModel):
     """Composition depuis une sélection explicite **ou** depuis une requête de recherche."""
 
     media_ids: list[int] | None = None
-    from_search: dict[str, Any] | None = None
+    from_search: FromSearchFilters | None = None
 
 
 class CollectionAddItemsResponse(BaseModel):

@@ -82,11 +82,16 @@ def _count_remaining(session: Session) -> int:
     return int(session.execute(stmt).scalar_one())
 
 
-def _make_heartbeat(session: Session, job: Job, worker_id: str) -> Callable[[], None]:
-    """`ctx.heartbeat()` — à appeler toutes les ~10 s dans les handlers longs (§3-E.5)."""
+def _make_heartbeat(job: Job, worker_id: str) -> Callable[[], None]:
+    """`ctx.heartbeat()` — à appeler toutes les ~10 s dans les handlers longs (§3-E.5).
+
+    Ne capture volontairement **aucune session** : `claim.heartbeat` écrit sur sa propre
+    connexion dédiée (revue J2, 🔴 n°2) — capturer `ctx.session` ici referait exactement
+    l'erreur corrigée dans `claim.py`.
+    """
 
     def _heartbeat() -> None:
-        refresh_heartbeat(session, job.id, worker_id)
+        refresh_heartbeat(job.id, worker_id)
 
     return _heartbeat
 
@@ -128,7 +133,7 @@ def _process_one(session: Session, job: Job, worker_id: str, result: DrainResult
         job=job,
         session=session,
         worker_id=worker_id,
-        heartbeat=_make_heartbeat(session, job, worker_id),
+        heartbeat=_make_heartbeat(job, worker_id),
     )
     try:
         job_result = spec.func(ctx)
@@ -265,7 +270,7 @@ def drain(
                 # lot, pas seulement une fois à la réclamation — un lot de 10 jobs à
                 # 1-3 s/job peut voir son dernier job démarrer plusieurs minutes après la
                 # réclamation initiale.
-                refresh_heartbeat(session, job.id, worker_id)
+                refresh_heartbeat(job.id, worker_id)
                 _process_one(session, job, worker_id, result)
 
         result.remaining = _count_remaining(session)

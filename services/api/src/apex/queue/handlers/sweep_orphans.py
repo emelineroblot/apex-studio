@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from apex.models.media import Media, UploadBatch
 from apex.queue.registry import JobContext, handler
+from apex.services.search_projection import project_media
 from apex.services.storage import get_storage_client
 
 ORPHAN_AGE_THRESHOLD = timedelta(hours=1)
@@ -83,6 +84,9 @@ def handle_sweep_orphans(ctx: JobContext) -> dict[str, Any]:
         )
         session.add(orphan)
         session.flush()
+        # Un objet orphelin devient malgré tout une ligne `media` (« un bac visible plutôt
+        # qu'un octet perdu ») — elle doit être trouvable comme n'importe quelle autre (§3-K).
+        project_media(session, orphan.id)
         quarantined += 1
 
     return {
