@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import * as reviewApi from "@/lib/api/resources/review";
 import * as settingsApi from "@/lib/api/resources/settings";
 import * as shootingsApi from "@/lib/api/resources/shootings";
 import type { ReviewItem, ShootingSummary } from "@/lib/api/types";
 import {
   clampIndex,
+  computeQueueProgress,
   nextUndecidedIndex,
   resolveBatchTargets,
   stageDecisions,
@@ -116,8 +118,11 @@ export default function ReviewPage() {
     setSubmitting(true);
     setSubmitNotice(null);
     const payload = toReviewDecisionsPayload(decisions);
+    // `shootingId` (§ revue J2 🟠7) : `remaining` doit être scopé à la même population que
+    // `initialRemaining` (posé par `GET /review/queue?shooting_id=…`), sinon la barre de
+    // progression compare deux univers différents — voir `lib/review/batch.ts::computeQueueProgress`.
     reviewApi
-      .decide(payload)
+      .decide(payload, shootingId)
       .then((res) => {
         const appliedIds = new Set(payload.map((d) => d.candidate_id));
         setItems((prev) => prev.filter((i) => !appliedIds.has(i.candidate_id)));
@@ -134,7 +139,7 @@ export default function ReviewPage() {
         setError(err);
         setSubmitting(false);
       });
-  }, [decisions]);
+  }, [decisions, shootingId]);
 
   // Recharge une nouvelle page quand la file locale se vide mais qu'il en reste côté serveur —
   // garde le flux clavier continu sans action de l'utilisateur.
@@ -190,7 +195,14 @@ export default function ReviewPage() {
     <div>
       <PageHeader
         title="File de validation OCR"
-        description="Photos dont le numéro lu est incertain, ou incohérent avec les engagements du shooting."
+        // Revue J2 🟡15 : cette file ne contient jamais de cas « incohérent avec les
+        // engagements » (`GET /review/queue` filtre strictement `resolution == 'review'`,
+        // § `routers/review.py`) — l'ancien libellé promettait un contenu qu'aucun candidat
+        // ne remplit jamais en mode réel. Les incohérences (numéro lu avec confiance, mais
+        // absent des engagements) vivent dans le bac « incohérences » de la recherche à
+        // facettes (`attachment_status = inconsistent`), pas ici — d'où le lien ci-dessous
+        // plutôt qu'un mot dans la description qui ne correspond à rien à l'écran.
+        description="Photos dont le numéro lu est incertain — confiance entre les deux seuils configurés."
         actions={
           <>
             <label className="flex items-center gap-2 text-sm text-ink-600">
@@ -208,6 +220,12 @@ export default function ReviewPage() {
                 ))}
               </select>
             </label>
+            <Link
+              href="/search?status=inconsistent"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm font-medium text-ink-800 transition-colors hover:bg-ink-50 focus-visible:outline-2 focus-visible:outline-accent-600 focus-visible:outline-offset-2"
+            >
+              Voir les incohérences → recherche
+            </Link>
             <Button variant="secondary" size="sm" onClick={() => setShowHelp(true)}>
               Aide clavier (?)
             </Button>
@@ -232,7 +250,7 @@ export default function ReviewPage() {
       ) : (
         <div className="flex flex-col gap-4">
           <ProgressBar
-            value={initialRemaining > 0 ? 1 - remainingTotal / initialRemaining : 1}
+            value={computeQueueProgress(initialRemaining, remainingTotal)}
             label={`${remainingTotal} restant${remainingTotal > 1 ? "s" : ""} · ${decisions.size} en attente d'envoi`}
           />
 

@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import HTTPException
-from sqlalchemy import ColumnElement, Float, Select, cast, func, or_, select
+from sqlalchemy import ColumnElement, Float, Select, cast, func, select
 from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy.orm import Session
 
@@ -178,12 +178,16 @@ def _facet_predicate(key: str, filters: SearchFilters) -> ColumnElement[bool] | 
 def visibility_clause(user: AppUser) -> ColumnElement[bool] | None:
     """Même cloisonnement que `services/access.py::media_visibility_clause`, sans jointure
     à `media` — `media_search` porte déjà `shooting_id`/`uploaded_by` (§3-K.1).
+
+    Revue J2 (🟠 n°4) : ce module réimplémentait la règle en propre (divergence relevée en
+    intégration live — la clause de défense « média sans shooting » du collapse de séries,
+    ajoutée à `routers/media.py` en clôture de J1, avait été perdue de la même façon en
+    recopiant `series_collapse_clause` ici sans la partager). Fermé pour de bon : source
+    unique paramétrée par colonnes (`access.media_visibility_clause_for`), jamais une
+    seconde copie du prédicat.
     """
-    if access.is_owner(user):
-        return None
-    return or_(
-        MediaSearch.shooting_id.in_(access.visible_shooting_ids(user)),
-        MediaSearch.uploaded_by == user.id,
+    return access.media_visibility_clause_for(
+        user, shooting_id=MediaSearch.shooting_id, uploaded_by=MediaSearch.uploaded_by
     )
 
 

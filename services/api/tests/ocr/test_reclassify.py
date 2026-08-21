@@ -34,6 +34,62 @@ def _run_queue() -> None:
     drain(SessionLocal, "test-reclassify", deadline=None, batch_size=10)
 
 
+def _imported_apex_modules(path: Path) -> set[str]:
+    """Modules `apex.*` référencés par `path`, imports imbriqués (fonctions, `TYPE_CHECKING`)
+    inclus — `ast.walk` descend dans tout le corps du fichier, pas seulement le niveau module.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names if alias.name.startswith("apex"))
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("apex"):
+            modules.add(node.module)
+            # `from apex.pipeline.ocr import classify` importe potentiellement un
+            # **sous-module** (`apex.pipeline.ocr.classify`) autant qu'un simple nom — les
+            # deux candidats sont ajoutés, `_module_to_path` élimine ceux qui ne
+            # correspondent à aucun fichier réel.
+            modules.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return modules
+
+
+def _module_to_path(root: Path, module: str) -> Path | None:
+    """`apex.pipeline.ocr.classify` → `<root>/pipeline/ocr/classify.py` (`root` = `src/apex`).
+
+    `None` si `module` ne correspond à aucun fichier réel (ex. une classe importée, pas un
+    sous-module — cas normal, pas une erreur).
+    """
+    parts = module.split(".")[1:]  # retire le préfixe `apex` commun à `root`
+    if not parts:
+        return None
+    module_file = root.joinpath(*parts).with_suffix(".py")
+    if module_file.is_file():
+        return module_file
+    package_init = root.joinpath(*parts, "__init__.py")
+    if package_init.is_file():
+        return package_init
+    return None
+
+
+def _transitive_apex_import_closure(root: Path, entry: Path) -> set[Path]:
+    """Fermeture transitive des imports `apex.*` depuis `entry`, résolue sur le système de
+    fichiers — la « vraie » preuve structurelle attendue par la revue J2 (🟠 n°6), par
+    opposition à une liste de fichiers écrite à la main.
+    """
+    visited: set[Path] = set()
+    queue = [entry]
+    while queue:
+        current = queue.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        for module in _imported_apex_modules(current):
+            resolved = _module_to_path(root, module)
+            if resolved is not None and resolved not in visited:
+                queue.append(resolved)
+    return visited
+
+
 class TestReprojectionSansInference:
     def test_a_threshold_change_redistributes_without_calling_the_model(
         self, db_session, owner, shooting, batch
@@ -90,28 +146,34 @@ class TestReprojectionSansInference:
         Un test de comportement ne couvre que les cas qu'il exécute ; celui-ci ferme la
         porte pour de bon. Si un futur refactor réintroduit `engine` dans la chaîne de
         re-projection, il échoue immédiatement et explique pourquoi.
+
+        Revue J2 (🟠 n°6) : la première version listait 4 fichiers à la main et cherchait la
+        sous-chaîne `"ocr.engine"` — une inférence ajoutée dans un module non listé (ex.
+        `search_projection.py`, dont `reclassify_ocr.py` dépend réellement) passait sans
+        qu'aucun test ne s'en aperçoive. Remplacé par une **vraie fermeture transitive** des
+        imports préfixés `apex.` depuis `reclassify_ocr.py` — module par module, résolus sur
+        le système de fichiers, pas une liste figée.
         """
         root = Path(__file__).resolve().parents[2] / "src" / "apex"
-        checked = [
-            root / "queue" / "handlers" / "reclassify_ocr.py",
-            root / "pipeline" / "ocr" / "classify.py",
-            root / "pipeline" / "ocr" / "normalize.py",
-            root / "services" / "ocr_settings.py",
-        ]
-        for path in checked:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            imported: set[str] = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    imported.update(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    imported.add(node.module)
-                    imported.update(f"{node.module}.{alias.name}" for alias in node.names)
-            offending = {name for name in imported if "ocr.engine" in name}
-            assert not offending, (
-                f"{path.name} importe {offending} : la re-projection des candidats doit être "
-                "structurellement incapable de déclencher une inférence."
-            )
+        entry = root / "queue" / "handlers" / "reclassify_ocr.py"
+        closure = _transitive_apex_import_closure(root, entry)
+
+        # Filet anti-régression du filet lui-même : si la résolution de modules se casse
+        # silencieusement (ex. changement de layout), la fermeture s'effondre à `{entry}`
+        # et le test suivant passerait pour la mauvaise raison.
+        assert len(closure) >= 8, (
+            f"fermeture transitive suspicieusement petite ({len(closure)} fichiers) : "
+            "la résolution des imports `apex.*` a-t-elle échoué silencieusement ? "
+            f"{sorted(p.name for p in closure)}"
+        )
+
+        engine_path = root / "pipeline" / "ocr" / "engine.py"
+        assert engine_path not in closure, (
+            "la fermeture transitive des imports de reclassify_ocr.py atteint "
+            f"{engine_path} : la re-projection des candidats doit être structurellement "
+            "incapable de déclencher une inférence. Chemin d'import à couper : "
+            f"{sorted(p.relative_to(root).as_posix() for p in closure)}"
+        )
 
     def test_reclassification_can_be_scoped_to_a_single_shooting(
         self, db_session, owner, shooting, batch

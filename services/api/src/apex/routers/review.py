@@ -278,9 +278,13 @@ def review_decisions(
         project_media_search(db, sorted(touched))
     db.commit()
 
+    # Revue J2 (🟠 n°7) : borné au `shooting_id` de la requête quand il est fourni — avec
+    # 384 candidats au total et 20 sur le shooting filtré, `remaining` global affichait une
+    # barre de progression fausse (« 1 − 379/20 ») sur la démonstration nominale du
+    # traitement en lot.
     remaining = int(
         db.execute(
-            select(func.count()).select_from(_queue_stmt(user, None).subquery())
+            select(func.count()).select_from(_queue_stmt(user, payload.shooting_id).subquery())
         ).scalar_one()
     )
     applied = len(payload.decisions) - len(errors)

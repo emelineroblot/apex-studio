@@ -101,19 +101,35 @@ def assert_can_write_engagements(session: Session, user: AppUser, shooting_id: i
         raise _not_found("Shooting")
 
 
-def media_visibility_clause(user: AppUser) -> ColumnElement[bool] | None:
-    """Condition SQL à `.where()` sur une requête `Media` — jamais une liste Python.
+def media_visibility_clause_for(
+    user: AppUser, *, shooting_id: Any, uploaded_by: Any
+) -> ColumnElement[bool] | None:
+    """Cloisonnement média — paramétré par colonnes (revue J2, 🟠 n°4), même patron que
+    `series_collapse_clause`/`exclude_duplicates_clause` ci-dessous : `services/facets.py`
+    portait sa **propre** réimplémentation de cette règle (`visibility_clause`), la seule
+    divergence du projet vis-à-vis de l'invariant « une seule porte » — plus grave ici
+    qu'ailleurs puisque c'est du cloisonnement de rôle, pas juste une visibilité par défaut.
+    Un paramètre `model: type` unique n'apporterait qu'une fausse généricité (`Media` et
+    `MediaSearch` ne sont pas le même modèle SQLAlchemy, cf. commentaire plus bas) : passer
+    les deux colonnes une par une rend un oubli impossible.
 
-    `owner` : aucune restriction. `photographer` : le média appartient à un de ses
-    shootings, **ou** il l'a lui-même déposé (bac « à rattacher » avant tout rattachement,
+    `owner` : aucune restriction. `photographer` : la ligne appartient à un de ses
+    shootings, **ou** il l'a lui-même déposée (bac « à rattacher » avant tout rattachement,
     où `shooting_id IS NULL`) — sans cette clause, un photographe perdrait de vue ses
     propres imports tant qu'ils ne sont pas rattachés.
     """
     if is_owner(user):
         return None
-    return or_(
-        Media.shooting_id.in_(visible_shooting_ids(user)),
-        Media.uploaded_by == user.id,
+    return or_(shooting_id.in_(visible_shooting_ids(user)), uploaded_by == user.id)
+
+
+def media_visibility_clause(user: AppUser) -> ColumnElement[bool] | None:
+    """Condition SQL à `.where()` sur une requête `Media` — jamais une liste Python.
+
+    Enveloppe de `media_visibility_clause_for`, colonnes `Media` — voir sa docstring.
+    """
+    return media_visibility_clause_for(
+        user, shooting_id=Media.shooting_id, uploaded_by=Media.uploaded_by
     )
 
 

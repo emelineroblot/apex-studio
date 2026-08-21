@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from apex.db import heartbeat_engine
 from apex.models.job import Job
 from apex.queue.registry import get_handler
 
@@ -93,13 +94,25 @@ def release_unclaimed(session: Session, jobs: list[Job], worker_id: str) -> int:
     return released
 
 
-def heartbeat(session: Session, job_id: int, worker_id: str) -> bool:
-    """Rafraîchit `heartbeat_at` (§3-E.5) — `True` si ce worker détient toujours le job."""
-    outcome = cast(
-        CursorResult, session.execute(_HEARTBEAT_SQL, {"id": job_id, "worker_id": worker_id})
-    )
-    session.commit()
-    return bool(outcome.rowcount)
+def heartbeat(job_id: int, worker_id: str) -> bool:
+    """Rafraîchit `heartbeat_at` (§3-E.5) — `True` si ce worker détient toujours le job.
+
+    **Connexion dédiée, jamais la session du handler** (revue J2, 🔴 n°2). `_make_heartbeat`
+    (`runner.py`) capturait auparavant `ctx.session` : `heartbeat()` y exécutait un `UPDATE`
+    puis un `session.commit()`, ce qui committait **tout le travail métier en cours** du
+    handler à chaque appel de `ctx.heartbeat()` — silencieusement, en contradiction avec la
+    convention du projet (`worker-queue.instructions.md`) et avec la garantie « une seule
+    transaction » de `demo_reset` (docstring `handlers/demo_reset.py`). Reproduit : un
+    `POST /demo/seed` interrompu entre le heartbeat de `_create_simulated_media` et la fin
+    de `run_seed` laissait 8 472 médias committés, `media_search` vide, sans erreur ni job
+    rouge. `heartbeat_engine` (`db.py`, `NullPool`) en `AUTOCOMMIT`, indépendant du pool
+    applicatif et de toute transaction ORM en cours : cet appel ne peut plus jamais committer
+    que la ligne `job` elle-même, et ne dispute plus les connexions des sessions actives sous
+    charge concurrente (§ docstring de `heartbeat_engine`).
+    """
+    with heartbeat_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        outcome = conn.execute(_HEARTBEAT_SQL, {"id": job_id, "worker_id": worker_id})
+        return bool(outcome.rowcount)
 
 
 def claim_batch(session: Session, worker_id: str, batch_size: int) -> list[Job]:

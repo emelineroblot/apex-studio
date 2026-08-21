@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import type { FacetTerm } from "@/lib/api/types";
+import { missingSelectedTerms } from "@/lib/search/facetSelection";
 
 /**
  * Groupe de cases à cocher avec **compteur par option** (§3-K.2 — les compteurs reflètent
@@ -9,6 +10,13 @@ import type { FacetTerm } from "@/lib/api/types";
  * Une facette à zéro résultat reste affichée mais grisée : décocher un filtre pour la
  * retrouver doit rester possible sans qu'elle disparaisse de la liste (piège classique des
  * panneaux de facettes qui « sautent »).
+ *
+ * Revue J2 🟡14 — `terms` est tronqué côté backend (`FACET_TERM_LIMIT = 50`, par volume). Un
+ * filtre **actif** dont l'id ne fait pas partie de ce top 50 n'apparaîtrait plus du tout ici
+ * et deviendrait impossible à décocher autrement qu'en réinitialisant tous les filtres. Les
+ * valeurs sélectionnées absentes de `terms` sont donc toujours réinjectées, quelle que soit
+ * leur position — sans libellé métier disponible à ce niveau (le panneau ne reçoit que des
+ * ids), affichées avec un repli honnête plutôt qu'un libellé inventé.
  */
 export function FacetCheckboxGroup({
   legend,
@@ -25,9 +33,14 @@ export function FacetCheckboxGroup({
 }) {
   const [expanded, setExpanded] = useState(false);
   const groupId = useId();
-  if (terms.length === 0) return null;
+  if (terms.length === 0 && selected.length === 0) return null;
 
-  const visible = expanded ? terms : terms.slice(0, collapseAfter);
+  const missing = missingSelectedTerms(terms, selected, (t, id) => t.id === id, (id) => ({
+    id,
+    label: `Filtre actif (#${id})`,
+    count: 0,
+  }));
+  const visible = [...(expanded ? terms : terms.slice(0, collapseAfter)), ...missing];
   const selectedSet = new Set(selected);
 
   function toggle(id: number) {

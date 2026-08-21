@@ -21,6 +21,7 @@ from apex.demo import seed as seed_module
 from apex.models.catalog import Client, Driver
 from apex.models.media import Media
 from apex.models.shooting import Engagement, Shooting
+from apex.pipeline.ocr import classify
 
 
 def _fingerprint(session: Session) -> str:
@@ -100,6 +101,37 @@ class TestDeterminism:
         assert _fingerprint(db_session) == before
 
 
+class TestPartialCatalogSecondSafetyNet:
+    def test_reset_false_on_a_partial_catalog_refuses_instead_of_a_silent_no_op(
+        self, db_session: Session, small_seed
+    ) -> None:
+        """Second filet du correctif heartbeat (revue J2, 🔴 n°2).
+
+        Simule l'état laissé par un `POST /demo/seed` interrompu **avant** le commit final
+        de `run_seed` (peu importe la cause exacte de l'interruption) : `client` peuplé,
+        `last_demo_reset` jamais écrit. Sans ce filet, `run_seed(reset=False)` rejoué
+        verrait `catalog_exists=True` et renverrait silencieusement `ran=False` — la démo
+        resterait cassée en permanence, sans qu'aucune erreur ne le signale.
+        """
+        db_session.add(Client(name="Catalogue interrompu", kind="team"))
+        db_session.commit()
+
+        with pytest.raises(seed_module.PartialDemoCatalogError):
+            seed_module.run_seed(db_session, reset=False)
+
+    def test_reset_true_repairs_a_partial_catalog(self, db_session: Session, small_seed) -> None:
+        """`reset=True` truque et régénère toujours — un catalogue partiel n'est jamais un
+        obstacle à la réparation explicite, seul le repli silencieux (`reset=False`) l'est.
+        """
+        db_session.add(Client(name="Catalogue interrompu", kind="team"))
+        db_session.commit()
+
+        result = seed_module.run_seed(db_session, reset=True)
+        db_session.commit()
+        assert result.ran is True
+        assert result.reset is True
+
+
 class TestProbity:
     def test_every_generated_media_is_flagged_simulated(
         self, db_session: Session, small_seed
@@ -147,3 +179,13 @@ class TestFullVolumeMatchesThePlanTargets:
         total = result.simulated_media
         assert counts.get("engagement_attached", 0) / total > 0.65
         assert counts.get("quarantined", 0) / total < 0.05
+
+        # Revue J2 (🟠 n°9) : le jeu de démo doit démontrer le curseur de seuils sur tout le
+        # catalogue, pas sur 5,6 % — reproduit la contradiction chiffrée de la revue
+        # (`auto: 0` vs `auto_ocr: ...`) et montre qu'elle a disparu.
+        distribution = classify.current_distribution(db_session)
+        assert distribution.auto > 0, "GET /settings/ocr afficherait encore « auto: 0 »"
+        # Presque tout le bac `engagement_attached`/pipeline_ocr (~72 %) doit désormais
+        # porter un candidat `auto` — tolérance large (tirage stochastique, cf. §3-N.1).
+        assert distribution.auto / counts.get("engagement_attached", 1) > 0.5
+        assert distribution.abstain > 0, "aucun candidat sous le seuil bas : rien à redistribuer"

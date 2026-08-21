@@ -9,7 +9,7 @@ import * as settingsApi from "@/lib/api/resources/settings";
 import { useAsync } from "@/hooks/useAsync";
 import { friendlyErrorMessage } from "@/lib/api/errors";
 import { formatBytes, formatDateTime } from "@/lib/format";
-import { AttachmentStatusBadge, IngestStatusBadge } from "@/components/media/StatusBadges";
+import { AttachmentStatusBadge, IngestStatusBadge, SimulatedBadge } from "@/components/media/StatusBadges";
 import { OcrBadge } from "@/components/media/OcrBadge";
 import { OCR_RESOLUTION_LABELS } from "@/lib/labels";
 import { AuthImage } from "@/components/media/AuthImage";
@@ -64,6 +64,7 @@ export default function MediaDetailPage({ params }: { params: Promise<{ id: stri
             description={`Média #${media.id} · ${formatBytes(media.byte_size)}`}
             actions={
               <>
+                {media.is_simulated ? <SimulatedBadge /> : null}
                 <IngestStatusBadge status={media.ingest_status} />
                 <AttachmentStatusBadge status={media.attachment_status} />
               </>

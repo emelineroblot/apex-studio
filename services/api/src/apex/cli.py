@@ -132,10 +132,14 @@ def seed(
     nocturne J3) appelle exactement la même fonction.
     """
     from apex.db import session_scope
-    from apex.demo.seed import run_seed
+    from apex.demo.seed import PartialDemoCatalogError, run_seed
 
     with session_scope() as db:
-        result = run_seed(db, reset=reset)
+        try:
+            result = run_seed(db, reset=reset)
+        except PartialDemoCatalogError as exc:
+            typer.echo(f"Erreur : {exc}")
+            raise typer.Exit(code=1) from exc
 
     if not result.ran:
         typer.echo("Jeu de démo déjà peuplé — no-op (utiliser --reset pour régénérer).")

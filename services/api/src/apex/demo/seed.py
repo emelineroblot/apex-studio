@@ -61,9 +61,14 @@ from apex.models.search import MediaOcrCandidate
 from apex.models.setting import AppSetting
 from apex.models.shooting import Engagement, Shooting, ShootingStaff
 from apex.models.user import AppUser
-from apex.pipeline.ocr.classify import RESOLUTION_NOT_ENGAGED, RESOLUTION_REVIEW
+from apex.pipeline.ocr.classify import (
+    RESOLUTION_ABSTAIN,
+    RESOLUTION_AUTO,
+    RESOLUTION_NOT_ENGAGED,
+    RESOLUTION_REVIEW,
+)
 from apex.pipeline.ocr.normalize import normalize_text
-from apex.services.ocr_settings import ENGINE_VERSION_DEFAULT
+from apex.services.ocr_settings import ENGINE_VERSION_DEFAULT, OCR_HIGH_DEFAULT, OCR_LOW_DEFAULT
 from apex.services.search_projection import project_media_search
 from apex.services.storage import StorageClient, get_storage_client
 
@@ -142,6 +147,23 @@ _ATTACHMENT_TARGETS: tuple[tuple[str, float], ...] = (
 )
 _QUARANTINE_RATE = 0.01  # tiré indépendamment, en plus des buckets ci-dessus (§3-N.1).
 
+# --- Revue J2 (🟠 n°9) : candidats bruts sur tout le catalogue, pas seulement 5,6% -----
+#
+# Avant ce correctif, seuls les bacs `pending_review`/`inconsistent` recevaient un candidat
+# OCR persisté — `engagement_attached` posait directement une ligne `media_engagement` sans
+# jamais passer par `media_ocr_candidate`. Conséquence mesurée : `GET /settings/ocr`
+# affichait `auto: 0` quand `GET /stats/auto-attach-rate` affichait `auto_ocr: 4786` (deux
+# écrans contradictoires devant un prospect), et `PUT /settings/ocr` ne pouvait redistribuer
+# que les 479 médias déjà pourvus d'un candidat (5,6 % du jeu de 8 472). Deux ajouts,
+# tous deux au-dessus/en dessous des seuils par défaut (`services/ocr_settings.py`) pour
+# rester cohérents avec `OCR_HIGH_DEFAULT`/`OCR_LOW_DEFAULT` sans les dupliquer :
+# - un candidat `auto` pour chaque média `engagement_attached` dont le rattachement vient
+#   du pipeline OCR (`attachment_source == "pipeline_ocr"`, ~72 % du bac) ;
+# - un candidat `abstain` pour une part des médias non rattachés à un engagement
+#   (`shooting_attached`/`unattached`) — une hypothèse basse confiance, cohérente avec
+#   « le modèle a bien lu quelque chose, pas assez sûr pour rattacher ».
+_LOW_CONFIDENCE_SAMPLE_RATE = 0.45
+
 # TRUNCATE (§3-N.2) — la table `job` n'y figure jamais (un job en cours pourrait s'y trouver,
 # purgée séparément de ses entrées `done` de plus de 24 h par le futur handler `demo_reset`).
 # `app_setting` n'y figure pas non plus : elle porte des réglages qui survivent au jeu de
@@ -178,6 +200,32 @@ _RESET_TABLES: tuple[str, ...] = (
     "circuit",
     "app_user",
 )
+
+
+class PartialDemoCatalogError(RuntimeError):
+    """Second filet du correctif heartbeat (revue J2, 🔴 n°2).
+
+    Avant ce correctif, un `POST /demo/seed` interrompu entre le commit prématuré causé par
+    `ctx.heartbeat()` et la fin de `run_seed` laissait `client`/`media` peuplés sans que
+    `last_demo_reset` soit jamais écrit — `run_seed(reset=False)` rejoué ensuite voyait
+    `catalog_exists=True` et renvoyait silencieusement `ran=False` : la démo restait cassée
+    en permanence (`media_search` vide, `GET /search` à 0), job vert, aucune erreur. Même la
+    connexion dédiée du heartbeat ne protège pas contre un worker tué par un autre mécanisme
+    en cours de route — ce filet est indépendant de la cause de l'interruption.
+    """
+
+
+def _catalog_is_partial(session: Session) -> bool:
+    """`client` peuplé mais `last_demo_reset` absent : un run précédent a démarré sans
+    aller à son terme. Une seule requête, cf. `PartialDemoCatalogError`.
+    """
+    catalog_exists = session.execute(select(func.count()).select_from(Client)).scalar_one() > 0
+    if not catalog_exists:
+        return False
+    last_reset = session.execute(
+        select(AppSetting.key).where(AppSetting.key == LAST_RESET_SETTING_KEY)
+    ).scalar_one_or_none()
+    return last_reset is None
 
 
 @dataclass(slots=True)
@@ -528,6 +576,34 @@ def _plan_shooting_media(
                     "engagement_id": None,
                 }
 
+            # 🟠 n°9 — cf. commentaire de `_LOW_CONFIDENCE_SAMPLE_RATE` : candidats bruts sur
+            # les deux bacs qui n'en recevaient jamais aucun.
+            if bucket == "engagement_attached" and attachment_source == "pipeline_ocr":
+                # Garanti non vide : ce bac n'existe que si `engagements` est non vide (repli
+                # plus haut), donc `group_engagement_ids` a été peuplé pour ce cas.
+                target_engagement_id = group_engagement_ids[0]
+                number = next(e.car_number for e in engagements if e.id == target_engagement_id)
+                ocr_candidate = {
+                    "raw_text": number,
+                    "normalized_number": normalize_text(number).number,
+                    "confidence": round(rng.uniform(OCR_HIGH_DEFAULT + 0.01, 0.99), 4),
+                    "resolution": RESOLUTION_AUTO,
+                    "engagement_id": target_engagement_id,
+                }
+            elif (
+                bucket in ("shooting_attached", "unattached")
+                and engagements
+                and rng.random() < _LOW_CONFIDENCE_SAMPLE_RATE
+            ):
+                guess = rng.choice(engagements)
+                ocr_candidate = {
+                    "raw_text": guess.car_number,
+                    "normalized_number": normalize_text(guess.car_number).number,
+                    "confidence": round(rng.uniform(0.05, OCR_LOW_DEFAULT - 0.01), 4),
+                    "resolution": RESOLUTION_ABSTAIN,
+                    "engagement_id": guess.id,
+                }
+
             row: dict[str, Any] = {
                 "uploaded_by": photographer_id,
                 "idempotency_key": f"sim-{faker.uuid4()}",
@@ -728,12 +804,28 @@ def _create_simulated_media(
         counts[planned.bucket] = counts.get(planned.bucket, 0) + 1
         for engagement_id in planned.engagement_ids:
             source = planned.row.get("attachment_source") or "pipeline_ocr"
+            # 🟠 n°9 : quand ce rattachement est justifié par le candidat OCR généré
+            # ci-dessus pour ce média (même `engagement_id`), reprendre **sa** confiance —
+            # c'est exactement ce que fait `classify._materialise_links` en production
+            # (`confidence=float(candidate.confidence)`). Un second rattachement de la même
+            # rafale multi-voiture (k=2, sans candidat propre) retombe sur l'ancien tirage
+            # indépendant.
+            candidate_confidence = (
+                planned.ocr_candidate["confidence"]
+                if planned.ocr_candidate is not None
+                and planned.ocr_candidate.get("engagement_id") == engagement_id
+                else None
+            )
             engagement_rows.append(
                 {
                     "media_id": media_id,
                     "engagement_id": engagement_id,
                     "source": "human" if source == "human" else "ocr",
-                    "confidence": None if source == "human" else round(rng.uniform(0.85, 0.99), 4),
+                    "confidence": (
+                        None
+                        if source == "human"
+                        else candidate_confidence or round(rng.uniform(0.85, 0.99), 4)
+                    ),
                     "created_by": photographer.id if source == "human" else None,
                 }
             )
@@ -842,9 +934,16 @@ def run_seed(
     """
     heartbeat = heartbeat or (lambda: None)
     started = time.monotonic()
-    catalog_exists = session.execute(select(func.count()).select_from(Client)).scalar_one() > 0
-    if not reset and catalog_exists:
-        return SeedResult(reset=False, ran=False)
+    if not reset:
+        if _catalog_is_partial(session):
+            raise PartialDemoCatalogError(
+                "Catalogue de démo incomplet détecté (« client » peuplé, "
+                f"« {LAST_RESET_SETTING_KEY} » absent) — un run précédent n'est jamais allé "
+                "à son terme. Relancer avec reset=True pour repartir d'une base propre."
+            )
+        catalog_exists = session.execute(select(func.count()).select_from(Client)).scalar_one() > 0
+        if catalog_exists:
+            return SeedResult(reset=False, ran=False)
 
     if reset:
         _truncate_demo_tables(session)

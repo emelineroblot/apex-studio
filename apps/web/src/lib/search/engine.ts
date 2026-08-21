@@ -66,6 +66,10 @@ export type SearchFilters = {
   date_from?: string | null;
   date_to?: string | null;
   status?: AttachmentStatus[];
+  /** `media.is_simulated` (§3-N.1) — mono-sélection à 3 états : `null`/absent = tous,
+   * `false` = réels seulement, `true` = simulés seulement. Revue J2 🟠1 : la colonne était
+   * projetée sans être filtrable. */
+  is_simulated?: boolean | null;
   series?: SeriesMode;
   sort?: SortMode;
 };
@@ -159,6 +163,10 @@ function buildClauses(filters: SearchFilters): Clause[] {
   if (filters.status?.length) {
     const set = new Set(filters.status);
     clauses.push({ facet: "status", test: (e) => set.has(e.attachment_status) });
+  }
+  if (filters.is_simulated != null) {
+    const wantSimulated = filters.is_simulated;
+    clauses.push({ facet: null, test: (e) => e.is_simulated === wantSimulated });
   }
   if (filters.iso_min != null) {
     const min = filters.iso_min;

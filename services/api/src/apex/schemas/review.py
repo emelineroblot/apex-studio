@@ -26,13 +26,19 @@ lot recherche/collections (le frontend les avait contournés par déduction, cf.
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # Doit rester égal, valeur pour valeur, à `apex.models.search.OCR_RESOLUTIONS` (CHECK en
 # base). Voir docstring de module — verrouillé par `tests/test_openapi_contract.py`.
 OcrResolution = Literal["auto", "review", "abstain", "not_engaged", "accepted", "rejected"]
 
 ReviewAction = Literal["accept", "reject", "reassign"]
+
+#: Revue J2 (🟡 16) : `ReviewDecisionsRequest.decisions` était sans borne — un lot arbitrairement
+#: grand aurait pu geler la requête HTTP (une transaction unique, § docstring de module).
+#: L'écran se traite au clavier par pages de `GET /review/queue` (défaut 25, max 100) : un
+#: lot largement au-delà de ça n'est jamais un usage normal.
+MAX_BATCH_DECISIONS = 500
 
 
 class OcrBoundingBox(BaseModel):
@@ -91,7 +97,11 @@ class ReviewDecision(BaseModel):
 
 
 class ReviewDecisionsRequest(BaseModel):
-    decisions: list[ReviewDecision]
+    decisions: list[ReviewDecision] = Field(max_length=MAX_BATCH_DECISIONS)
+    # Revue J2 (🟠 n°7) : `remaining` était toujours calculé sur la file **globale**, alors
+    # que `GET /review/queue` accepte déjà `shooting_id`. Contrat additif, non cassant —
+    # absent (`None`), le comportement précédent (file globale) est inchangé.
+    shooting_id: int | None = None
 
 
 class ReviewDecisionError(BaseModel):

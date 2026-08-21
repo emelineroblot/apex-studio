@@ -15,14 +15,27 @@ export async function queue(
   });
 }
 
-/** `POST /review/decisions` — transaction unique, erreurs partielles rapportées ligne par
- * ligne (§3-J.4/contrat). Jamais un appel par décision : c'est tout l'intérêt du lot. */
-export async function decide(decisions: ReviewDecision[]): Promise<ReviewDecisionsResponse> {
+/**
+ * `POST /review/decisions` — transaction unique, erreurs partielles rapportées ligne par
+ * ligne (§3-J.4/contrat). Jamais un appel par décision : c'est tout l'intérêt du lot.
+ *
+ * `shootingId` (revue J2 🟠7) : la file de validation accepte un filtre de shooting
+ * (`GET /review/queue?shooting_id=…`), mais `remaining` revenait jusqu'ici toujours global —
+ * la barre de progression comparait deux populations différentes dès qu'un filtre était
+ * actif. Passé en paramètre de requête (comme sur `queue()` ci-dessus), jamais dans le
+ * corps : ce n'est pas une donnée de la décision elle-même, c'est le contexte d'où elle est
+ * envoyée. § `lib/review/batch.ts::computeQueueProgress` pour la formule côté écran.
+ */
+export async function decide(
+  decisions: ReviewDecision[],
+  shootingId?: number | null,
+): Promise<ReviewDecisionsResponse> {
   if (API_MODE === "fixtures") {
-    return fixtures.decide(decisions);
+    return fixtures.decide(decisions, shootingId);
   }
   return apiRequest<ReviewDecisionsResponse>("/review/decisions", {
     method: "POST",
+    query: { shooting_id: shootingId },
     json: { decisions },
   });
 }

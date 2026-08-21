@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import type { FacetTerm } from "@/lib/api/types";
+import { hashStringId, missingSelectedTerms } from "@/lib/search/facetSelection";
 
 /**
  * Variante textuelle de `FacetCheckboxGroup` — pour les facettes dont la valeur de filtre
@@ -9,6 +10,12 @@ import type { FacetTerm } from "@/lib/api/types";
  * déterministe sans signification (le contrat impose `id: int` même pour ces deux
  * facettes textuelles côté fixtures, § `lib/search/engine.ts::hashStringId`), donc on
  * sélectionne par `label`, jamais par `id`.
+ *
+ * Revue J2 🟡14 — même correction que `FacetCheckboxGroup` : une valeur sélectionnée hors
+ * du top 50 renvoyé par le backend (`FACET_TERM_LIMIT`) est toujours réinjectée. Ici, à la
+ * différence de la variante numérique, le libellé métier **est** la valeur du filtre
+ * elle-même (`selected` porte directement la chaîne affichable) — pas de repli générique
+ * nécessaire.
  */
 export function FacetCheckboxGroupText({
   legend,
@@ -25,9 +32,14 @@ export function FacetCheckboxGroupText({
 }) {
   const [expanded, setExpanded] = useState(false);
   const groupId = useId();
-  if (terms.length === 0) return null;
+  if (terms.length === 0 && selected.length === 0) return null;
 
-  const visible = expanded ? terms : terms.slice(0, collapseAfter);
+  const missing = missingSelectedTerms(terms, selected, (t, label) => t.label === label, (label) => ({
+    id: hashStringId(label),
+    label,
+    count: 0,
+  }));
+  const visible = [...(expanded ? terms : terms.slice(0, collapseAfter)), ...missing];
   const selectedSet = new Set(selected);
 
   function toggle(label: string) {

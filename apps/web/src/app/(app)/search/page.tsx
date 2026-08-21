@@ -65,6 +65,7 @@ function SearchPageContent() {
       date_from: "",
       date_to: "",
       status: [],
+      is_simulated: null,
     });
   }
 

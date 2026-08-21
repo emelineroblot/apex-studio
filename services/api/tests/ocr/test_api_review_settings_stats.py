@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from apex.models.media import MediaEngagement
+from apex.models.media import MediaEngagement, UploadBatch
 from apex.models.search import MediaOcrCandidate
 from apex.models.shooting import Engagement, Shooting, ShootingStaff
 from apex.pipeline.ocr import classify
@@ -218,6 +218,97 @@ class TestFileDeValidation:
         assert payload["applied"] == 0
         assert "Engagement inconnu" in payload["errors"][0]["message"]
         assert _links(db_session, media) == []
+
+    def test_remaining_can_be_scoped_to_a_shooting(
+        self, client, db_session, owner, shooting, batch
+    ):
+        """Revue J2 (🟠 n°7) : `remaining` doit refléter la file du shooting filtré, pas la
+        file globale — `GET /review/queue` accepte déjà `shooting_id`, `POST
+        /review/decisions` ne le répercutait pas dans son propre calcul. Reproduit : 384
+        candidats au total, 20 sur le shooting traité, la barre affichait « 379 restants »
+        sur une file qui n'en contenait réellement que 15 (démonstration du traitement en
+        lot).
+        """
+        other = Shooting(
+            circuit_id=shooting.circuit_id,
+            title="Un second meeting",
+            starts_at=shooting.starts_at,
+            ends_at=shooting.ends_at,
+        )
+        db_session.add(other)
+        db_session.flush()
+        db_session.add(Engagement(shooting_id=other.id, car_number="12"))
+        other_batch = UploadBatch(
+            created_by=owner.id, shooting_hint_id=other.id, expected_count=0, status="open"
+        )
+        db_session.add(other_batch)
+        db_session.commit()
+
+        media_a1 = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="scope-a1"
+        )
+        media_a2 = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="scope-a2"
+        )
+        media_b = make_media(
+            db_session, owner=owner, batch=other_batch, shooting=other, key_suffix="scope-b"
+        )
+        add_candidate(db_session, media_a1, number="12", score=0.60)
+        add_candidate(db_session, media_a2, number="07", score=0.55)
+        candidate_b = add_candidate(db_session, media_b, number="12", score=0.55)
+        _project(db_session, [media_a1, media_a2, media_b])
+
+        response = client.post(
+            f"{API}/review/decisions",
+            headers=auth_headers(owner),
+            json={
+                "decisions": [{"candidate_id": candidate_b.id, "action": "accept"}],
+                "shooting_id": other.id,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["applied"] == 1
+        # Le shooting « other » vient d'être vidé (0 restant) ; le shooting « shooting »
+        # (fixture) porte encore 2 candidats en file — `remaining` doit refléter le premier,
+        # jamais le total global (2).
+        assert payload["remaining"] == 0
+
+    def test_remaining_defaults_to_the_global_queue_when_no_shooting_is_given(
+        self, client, db_session, owner, shooting, batch
+    ):
+        """Contrat additif (🟠 n°7) : `shooting_id` absent ⇒ comportement inchangé (file
+        globale), pas de régression pour un appelant qui ne le fournit pas encore.
+        """
+        media_a = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="scope-global-a"
+        )
+        media_b = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="scope-global-b"
+        )
+        candidate_a = add_candidate(db_session, media_a, number="12", score=0.60)
+        add_candidate(db_session, media_b, number="07", score=0.55)
+        _project(db_session, [media_a, media_b])
+
+        response = client.post(
+            f"{API}/review/decisions",
+            headers=auth_headers(owner),
+            json={"decisions": [{"candidate_id": candidate_a.id, "action": "accept"}]},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["remaining"] == 1
+
+    def test_a_decisions_batch_beyond_the_cap_is_rejected(self, client, owner) -> None:
+        """Revue J2 (🟡 16) : `decisions` était sans borne."""
+        from apex.schemas.review import MAX_BATCH_DECISIONS
+
+        body = {
+            "decisions": [
+                {"candidate_id": i, "action": "accept"} for i in range(MAX_BATCH_DECISIONS + 1)
+            ]
+        }
+        response = client.post(f"{API}/review/decisions", headers=auth_headers(owner), json=body)
+        assert response.status_code == 422
 
 
 class TestReglagesDesSeuils:
@@ -459,6 +550,50 @@ class TestCandidatsEtRattachementManuel:
         db_session.refresh(media)
         assert _links(db_session, media) == []
         assert media.attachment_status == "shooting_attached"
+
+    def test_removing_an_auto_ocr_attachment_leaves_zero_links_after_commit(
+        self, client, db_session, owner, shooting, batch
+    ):
+        """Revue J2 (🔴 n°1) — le cas que les deux tests existants ne couvraient pas.
+
+        L'OCR a rattaché la photo (candidat `auto`, score ≥ seuil haut). Le dirigeant
+        retire ce rattachement : sans le correctif, `project_media` (appelé juste après
+        la suppression) recharge le candidat encore `auto`, recalcule et **réinsère** la
+        ligne avant le commit — `204` sans rien avoir changé. La décision humaine doit être
+        terminale (`rejected`) avant toute re-projection.
+        """
+        media = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="del-auto"
+        )
+        engagement = _engagement(db_session, shooting, "12")
+        candidate = add_candidate(db_session, media, number="12", score=0.95)
+        _project(db_session, [media])
+        db_session.expire_all()
+        db_session.refresh(candidate)
+        assert candidate.resolution == "auto"
+        assert len(_links(db_session, media)) == 1
+
+        response = client.delete(
+            f"{API}/media/{media.id}/engagements/{engagement.id}", headers=auth_headers(owner)
+        )
+        assert response.status_code == 204, response.text
+
+        db_session.expire_all()
+        db_session.refresh(media)
+        assert _links(db_session, media) == [], (
+            "le rattachement auto a été réinséré par la re-projection : "
+            "la suppression n'a rien changé malgré le 204"
+        )
+        assert media.attachment_status == "shooting_attached"
+        db_session.refresh(candidate)
+        assert candidate.resolution == "rejected", "la décision humaine doit devenir terminale"
+
+        # Rejouer la projection (ex. `reclassify_ocr` après un changement de seuil) ne doit
+        # pas ressusciter le rattachement — l'arbitrage humain est terminal.
+        classify.project_media_batch(db_session, [media.id], load_ocr_settings(db_session))
+        db_session.commit()
+        db_session.expire_all()
+        assert _links(db_session, media) == []
 
 
 def _links(db, media):

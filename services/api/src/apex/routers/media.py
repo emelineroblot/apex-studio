@@ -4,11 +4,12 @@ rattachement manuel, et (J2) rattachement/OCR manuels.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -421,6 +422,30 @@ def delete_media_engagement(
     db.delete(link)
     db.flush()
 
+    # Revue J2 (🔴 n°1) : rendre la décision humaine **terminale avant** re-projection —
+    # sinon `classify.project_media` juste en-dessous recharge le(s) candidat(s) OCR visant
+    # `engagement_id`, recalcule `auto`/`accepted` et **réinsère** le rattachement qu'on
+    # vient de supprimer, avant même le commit. Même sémantique que `POST /review/decisions`
+    # (action `reject`, `pipeline/ocr/classify.py:36-39`), simplement pas branchée sur ce
+    # chemin jusqu'ici. Seuls les candidats encore « machine » (`MACHINE_RESOLUTIONS`) sont
+    # concernés — un candidat déjà `accepted`/`rejected` reste tel quel, terminal.
+    now = datetime.now(UTC)
+    db.execute(
+        update(MediaOcrCandidate)
+        .where(
+            MediaOcrCandidate.media_id == media_id,
+            MediaOcrCandidate.engagement_id == engagement_id,
+            MediaOcrCandidate.resolution.in_(classify.MACHINE_RESOLUTIONS),
+        )
+        .values(
+            resolution=classify.RESOLUTION_REJECTED,
+            engagement_id=None,
+            resolved_by=user.id,
+            resolved_at=now,
+        )
+    )
+    db.flush()
+
     # Retirer un rattachement ne « détache » pas arbitrairement le média : on rejoue la
     # projection déterministe, qui recalcule `attachment_status` à partir des candidats et
     # des rattachements restants. Un candidat déjà arbitré reste arbitré — retirer le
@@ -428,14 +453,9 @@ def delete_media_engagement(
     classify.project_media(db, media, load_ocr_settings(db))
 
     # Repli pour un média sans aucun candidat OCR (rattachement 100 % manuel) : la
-    # projection est alors un no-op délibéré, personne ne recalcule son état.
-    still_linked = db.execute(
-        select(MediaEngagement.media_id).where(MediaEngagement.media_id == media_id).limit(1)
-    ).first()
-    if not still_linked and media.attachment_status == "engagement_attached":
-        media.attachment_status = (
-            "shooting_attached" if media.shooting_id is not None else "unattached"
-        )
+    # projection est alors un no-op délibéré, personne ne recalcule son état — factorisé
+    # (revue J2, 🟠 n°2) : c'est la même garde que `DELETE /engagements/{id}` a besoin.
+    classify.reconcile_unlinked_attachment_status(db, [media_id])
     db.flush()
     project_media(db, media.id)
     db.commit()

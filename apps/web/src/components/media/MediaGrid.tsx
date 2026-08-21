@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { MediaSummary } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
 import { AuthImage } from "@/components/media/AuthImage";
-import { IngestStatusBadge } from "@/components/media/StatusBadges";
+import { IngestStatusBadge, SimulatedBadge } from "@/components/media/StatusBadges";
 
 /** Construit l'URL d'ouverture d'une série complète — consommée par `library/page.tsx`
  * (§ « série collapsée » du contrat `GET /media?series=all`, pas de paramètre `series_id`
@@ -80,7 +80,10 @@ export function MediaGrid({
                   <span className="truncate text-xs text-ink-500">
                     {item.shot_at ? formatDateTime(item.shot_at) : "Horodatage inconnu"}
                   </span>
-                  <IngestStatusBadge status={item.ingest_status} />
+                  <span className="flex shrink-0 items-center gap-1">
+                    {item.is_simulated ? <SimulatedBadge /> : null}
+                    <IngestStatusBadge status={item.ingest_status} />
+                  </span>
                 </div>
               </Link>
               {isSeriesRepresentative ? (

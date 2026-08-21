@@ -24,6 +24,8 @@ export type SearchFilterState = {
   date_from: string;
   date_to: string;
   status: AttachmentStatus[];
+  /** §3-N.1 / revue J2 🟠1 — `null` = tous, `false` = réels, `true` = simulés. */
+  is_simulated: boolean | null;
   series: SeriesMode;
   sort: SortMode;
 };
@@ -45,6 +47,7 @@ export const EMPTY_FILTERS: SearchFilterState = {
   date_from: "",
   date_to: "",
   status: [],
+  is_simulated: null,
   series: "collapsed",
   sort: "-shot_at",
 };
@@ -69,6 +72,7 @@ const URL_KEYS: Record<keyof SearchFilterState, string> = {
   date_from: "from",
   date_to: "to",
   status: "status",
+  is_simulated: "sim",
   series: "series",
   sort: "sort",
 };
@@ -85,6 +89,7 @@ export function filtersToSearchParams(filters: SearchFilterState): URLSearchPara
     if (values.length) params.set(URL_KEYS[key], values.join(","));
   }
   if (filters.status.length) params.set(URL_KEYS.status, filters.status.join(","));
+  if (filters.is_simulated != null) params.set(URL_KEYS.is_simulated, filters.is_simulated ? "1" : "0");
   if (filters.iso_min != null) params.set(URL_KEYS.iso_min, String(filters.iso_min));
   if (filters.iso_max != null) params.set(URL_KEYS.iso_max, String(filters.iso_max));
   if (filters.focal_min != null) params.set(URL_KEYS.focal_min, String(filters.focal_min));
@@ -127,6 +132,7 @@ export function searchParamsToFilters(params: URLSearchParams): SearchFilterStat
     date_from: params.get(URL_KEYS.date_from) ?? "",
     date_to: params.get(URL_KEYS.date_to) ?? "",
     status: parseStringList(params.get(URL_KEYS.status)) as AttachmentStatus[],
+    is_simulated: params.has(URL_KEYS.is_simulated) ? params.get(URL_KEYS.is_simulated) === "1" : null,
     series: (params.get(URL_KEYS.series) as SeriesMode | null) ?? EMPTY_FILTERS.series,
     sort: (params.get(URL_KEYS.sort) as SortMode | null) ?? EMPTY_FILTERS.sort,
   };
@@ -150,6 +156,7 @@ export function filtersToSearchFilters(filters: SearchFilterState): SearchFilter
     date_from: filters.date_from || null,
     date_to: filters.date_to || null,
     status: filters.status,
+    is_simulated: filters.is_simulated,
     series: filters.series,
     sort: filters.sort,
   };

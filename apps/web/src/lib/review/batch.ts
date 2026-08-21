@@ -96,3 +96,27 @@ export function clampIndex(index: number, length: number): number {
   if (length === 0) return 0;
   return Math.min(Math.max(index, 0), length - 1);
 }
+
+/**
+ * Fraction de la barre de progression de la file de validation (revue J2 🟠7).
+ *
+ * **La formule elle-même n'a jamais été le bug** : `1 - remaining / initial` est correcte
+ * dès lors que les deux nombres décrivent la **même population**. Le bug constaté en revue
+ * venait de la plomberie, pas du calcul — `initialRemaining` posé par `GET /review/queue`
+ * (scopé sur `shooting_id` si un filtre est actif) tandis que `remainingTotal` revenait de
+ * `POST /review/decisions`, qui ignorait ce filtre et renvoyait un total **global**. Avec
+ * 384 candidats au total et 20 sur le shooting filtré, la barre affichait `1 − 379/20`
+ * (négatif, borné à 0 par `ProgressBar`) au lieu de `1 − 15/20`. Corrigé côté appel en
+ * passant désormais `shooting_id` à `POST /review/decisions` (§ `resources/review.ts`) —
+ * cette fonction reste néanmoins le bon endroit pour verrouiller la formule par un test,
+ * puisqu'une relecture ne l'aurait pas forcément attrapée non plus (les deux nombres
+ * *semblent* du même ordre de grandeur tant qu'on ne connaît pas le filtre actif).
+ *
+ * Bornée à `[0, 1]` — un `remainingTotal` transitoirement supérieur à `initialRemaining`
+ * (nouveaux candidats apparus pendant la session) ne doit jamais produire une barre qui
+ * recule sous zéro en apparence.
+ */
+export function computeQueueProgress(initialRemaining: number, remainingTotal: number): number {
+  if (initialRemaining <= 0) return 1;
+  return Math.min(1, Math.max(0, 1 - remainingTotal / initialRemaining));
+}

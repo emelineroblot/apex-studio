@@ -150,6 +150,53 @@ class TestCollectionComposition:
         assert resp.status_code == 200, resp.text
         assert resp.json()["added"] == len(collection_dataset["media_ids"])
 
+    def test_an_unknown_media_id_is_skipped_not_a_server_error(
+        self, client, collection_dataset
+    ) -> None:
+        """Revue J2 (🟡 13) : `on_conflict_do_nothing` ne couvre que les doublons, pas une
+        violation de FK vers `media` — un id inexistant levait un `500`.
+        """
+        headers = auth_headers(collection_dataset["owner"])
+        media_ids = collection_dataset["media_ids"]
+        collection = client.post(
+            "/api/v1/collections",
+            json={"client_id": collection_dataset["client_id"], "title": "Id inconnu"},
+            headers=headers,
+        ).json()
+
+        resp = client.post(
+            f"/api/v1/collections/{collection['id']}/items",
+            json={"media_ids": [media_ids[0], 999_999_999]},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["added"] == 1
+
+        detail = client.get(f"/api/v1/collections/{collection['id']}", headers=headers).json()
+        assert {item["media_id"] for item in detail["items"]} == {media_ids[0]}
+
+    def test_a_malformed_from_search_filter_is_a_422_not_a_500(
+        self, client, collection_dataset
+    ) -> None:
+        """Revue J2 (🟡 12) : `from_search` est désormais validé par Pydantic
+        (`FromSearchFilters`) — un champ mal typé est refusé en amont, jamais une exception
+        SQL non capturée en aval de `services/facets.py`.
+        """
+        headers = auth_headers(collection_dataset["owner"])
+        collection = client.post(
+            "/api/v1/collections",
+            json={"client_id": collection_dataset["client_id"], "title": "Filtre invalide"},
+            headers=headers,
+        ).json()
+
+        resp = client.post(
+            f"/api/v1/collections/{collection['id']}/items",
+            # `shooting_id` doit être une liste d'entiers, pas une chaîne libre.
+            json={"from_search": {"shooting_id": "pas-un-entier"}},
+            headers=headers,
+        )
+        assert resp.status_code == 422, resp.text
+
     def test_removing_an_item_and_publishing(self, client, collection_dataset) -> None:
         headers = auth_headers(collection_dataset["owner"])
         media_ids = collection_dataset["media_ids"]

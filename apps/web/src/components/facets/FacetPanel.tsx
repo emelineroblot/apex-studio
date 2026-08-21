@@ -6,6 +6,7 @@ import { FacetCheckboxGroup } from "@/components/facets/FacetCheckboxGroup";
 import { FacetCheckboxGroupText } from "@/components/facets/FacetCheckboxGroupText";
 import { FacetBucketList } from "@/components/facets/FacetBucketList";
 import { FacetStatusGroup } from "@/components/facets/FacetStatusGroup";
+import { FacetOriginToggle } from "@/components/facets/FacetOriginToggle";
 import { inputClassName } from "@/components/ui/Field";
 
 /**
@@ -125,6 +126,7 @@ export function FacetPanel({
         onChange={({ min, max }) => onChange({ focal_min: min, focal_max: max })}
       />
       <FacetStatusGroup terms={facets.status} selected={filters.status} onChange={(v) => onChange({ status: v })} />
+      <FacetOriginToggle value={filters.is_simulated} onChange={(v) => onChange({ is_simulated: v })} />
     </div>
   );
 }

@@ -310,7 +310,24 @@ class TestSimulationDeDistribution:
     def test_simulation_matches_what_the_projection_would_do(
         self, db_session, owner, shooting, batch
     ):
-        """`PUT /settings/ocr` promet un aperçu : il doit être exact, pas indicatif."""
+        """`PUT /settings/ocr` promet un aperçu : il doit être exact, pas indicatif.
+
+        Revue J2 (🟠 n°5) : deux cas que la première version de ce test ne pouvait pas
+        voir, tous deux ajoutés à la même vérification d'égalité globale plutôt qu'en tests
+        séparés — c'est précisément parce qu'ils participent à la **même** agrégation que
+        l'ancienne version divergeait silencieusement.
+
+        - Un média **sans shooting** (`no_shooting`) : l'ancienne simulation l'excluait
+          purement et simplement du calcul (`Media.shooting_id.is_not(None)` au `WHERE`),
+          alors que la projection réelle le force en abstention — reproduit en revue : un
+          recalage d'horloge détachant 400 photos affichait `abstain: 411` en réalité contre
+          `11` à l'aperçu.
+        - Un média **en quarantaine** (`quarantined`) : `project_media_batch` l'ignore
+          explicitement (`if media.ingest_status == "quarantined": continue`, jamais de
+          dérivé fiable) — sa résolution stockée ne bouge donc jamais, quel que soit le
+          seuil. L'ancienne simulation n'avait aucune notion de ce cas et l'aurait reclassé
+          en `auto` à haute confiance, alors que la réalité ne bouge pas.
+        """
         for index, score in enumerate((0.95, 0.72, 0.30, 0.91)):
             media = make_media(
                 db_session, owner=owner, batch=batch, shooting=shooting, key_suffix=f"sim{index}"
@@ -321,13 +338,38 @@ class TestSimulationDeDistribution:
         )
         add_candidate(db_session, ghost, number="99", score=0.99)
 
+        no_shooting = make_media(
+            db_session, owner=owner, batch=batch, shooting=None, key_suffix="sim-no-shooting"
+        )
+        add_candidate(db_session, no_shooting, number="12", score=0.99)
+
+        quarantined = make_media(
+            db_session, owner=owner, batch=batch, shooting=shooting, key_suffix="sim-quarantined"
+        )
+        # Confiance délibérément haute (0.99 ≥ high=0.90) : sans le filet de portée, la
+        # simulation la classerait `auto` — la réalité ne doit jamais bouger un candidat de
+        # média en quarantaine, quel que soit le score.
+        add_candidate(
+            db_session,
+            quarantined,
+            number="12",
+            score=0.99,
+            resolution=classify.RESOLUTION_REVIEW,
+        )
+        quarantined.ingest_status = "quarantined"
+        quarantined.quarantine_reason = "truncated_file"
+        db_session.commit()
+
         media_ids = [
             int(row)
             for row in db_session.execute(select(MediaOcrCandidate.media_id).distinct()).scalars()
         ]
         # Situation de production : les candidats ont déjà été projetés une fois par
         # `ocr_media` (qui insère et projette dans la même transaction). C'est cette
-        # première projection qui pose `engagement_id`, dont la simulation a besoin.
+        # première projection qui pose `engagement_id`, dont la simulation a besoin. Le
+        # média en quarantaine est inclus dans le lot comme en production
+        # (`reclassify_ocr` ne le filtre pas non plus) : `project_media_batch` doit
+        # l'ignorer de lui-même.
         classify.project_media_batch(db_session, media_ids, load_ocr_settings(db_session))
         db_session.commit()
 
@@ -346,3 +388,13 @@ class TestSimulationDeDistribution:
             actual.not_engaged,
         )
         assert actual.not_engaged == 1, "le n°99 reste une incohérence quel que soit le seuil"
+
+        db_session.refresh(quarantined)
+        [quarantined_candidate] = list(
+            db_session.execute(
+                select(MediaOcrCandidate).where(MediaOcrCandidate.media_id == quarantined.id)
+            ).scalars()
+        )
+        assert quarantined_candidate.resolution == classify.RESOLUTION_REVIEW, (
+            "un candidat de média en quarantaine ne doit jamais être reclassé"
+        )

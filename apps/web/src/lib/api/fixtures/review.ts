@@ -104,7 +104,18 @@ function reconcileMediaStatus(mediaId: number) {
   }
 }
 
-export async function decide(decisions: ReviewDecision[]): Promise<ReviewDecisionsResponse> {
+/**
+ * `shootingId` (revue J2 🟠7) : `remaining` doit rester dans la même population que celle
+ * affichée par `queue()` — sinon la barre de progression de `review/page.tsx` compare un
+ * dénominateur filtré à un numérateur global. Avant cette correction, cette fonction
+ * renvoyait toujours `unresolvedCandidates(null).length` (global), reproduisant ici même le
+ * bug relevé côté backend (`routers/review.py`) : reproduit à dessein en mode fixtures, un
+ * mode dégradé silencieux dans la maquette locale est aussi trompeur qu'en production.
+ */
+export async function decide(
+  decisions: ReviewDecision[],
+  shootingId?: number | null,
+): Promise<ReviewDecisionsResponse> {
   await delay(300);
   let applied = 0;
   let skipped = 0;
@@ -163,7 +174,7 @@ export async function decide(decisions: ReviewDecision[]): Promise<ReviewDecisio
 
   for (const id of touchedMediaIds) reconcileMediaStatus(id);
 
-  const remaining = unresolvedCandidates(null).length;
+  const remaining = unresolvedCandidates(shootingId).length;
   return { applied, skipped, errors, remaining };
 }
 

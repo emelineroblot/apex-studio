@@ -20,6 +20,7 @@ from apex.db import get_db
 from apex.models.catalog import Client, Driver, Team
 from apex.models.media import Media
 from apex.models.shooting import Engagement, Shooting, ShootingStaff
+from apex.pipeline.ocr import classify
 from apex.schemas.common import Page
 from apex.schemas.shooting import (
     EngagementCreate,
@@ -36,6 +37,8 @@ from apex.schemas.shooting import (
 )
 from apex.security import CurrentUser, require_role
 from apex.services import access
+from apex.services.ocr_settings import load_ocr_settings
+from apex.services.search_projection import project_media_search, project_media_search_for_shooting
 
 router = APIRouter(prefix="/shootings", tags=["shootings"])
 
@@ -204,7 +207,13 @@ def patch_shooting(
             status_code=404,
             detail={"code": "not_found", "message": "Shooting introuvable.", "detail": None},
         )
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    fields = payload.model_dump(exclude_unset=True)
+    # Revue J2 (🟠 n°2) : `media_search` dénormalise `client_id`/`circuit_id` **depuis le
+    # shooting** (`search_projection.py`, jointure `s.client_id, s.circuit_id`) — les
+    # changer laisse tout le catalogue du shooting cherchable sous l'ancien client/circuit
+    # jusqu'à la prochaine mutation individuelle d'un média.
+    needs_search_reprojection = "client_id" in fields or "circuit_id" in fields
+    for field, value in fields.items():
         setattr(shooting, field, value)
     try:
         db.commit()
@@ -221,6 +230,9 @@ def patch_shooting(
             },
         ) from exc
     db.refresh(shooting)
+    if needs_search_reprojection:
+        project_media_search_for_shooting(db, shooting_id)
+        db.commit()
     return _shooting_out(db, shooting)
 
 
@@ -455,6 +467,17 @@ def import_engagements(
             errors.append(EngagementImportError(line=line_no, message=str(exc.orig)))
         except _UnknownReferenceError as exc:
             errors.append(EngagementImportError(line=line_no, message=str(exc)))
+
+    # Revue J2 (🟠 n°2) : un import complète le référentiel *après* que l'OCR ait tourné
+    # (« engagement oublié à la saisie », `pipeline/ocr/classify.py`) — un candidat
+    # `not_engaged` faute d'engagement peut désormais matcher un numéro tout juste importé.
+    # `reindex_media` n'étant câblé sur aucune mutation du référentiel, cette reprojection
+    # doit être synchrone, dans la même transaction que l'import (§3-E.4.2).
+    if created:
+        media_ids = classify.media_ids_with_reprojectable_candidates(db, shooting_id)
+        if media_ids:
+            classify.project_media_batch(db, media_ids, load_ocr_settings(db))
+            project_media_search(db, media_ids)
 
     db.commit()
     return EngagementImportResult(created=created, skipped=skipped, errors=errors)

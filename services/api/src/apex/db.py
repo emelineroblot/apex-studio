@@ -11,6 +11,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from apex.config import settings
 
@@ -23,6 +24,17 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+# Moteur dédié au heartbeat (`queue/claim.py::heartbeat`, revue J2, 🔴 n°2) — **jamais**
+# `engine` ci-dessus : sous charge concurrente (plusieurs workers, un heartbeat par job
+# traité), partager le même `QueuePool` de 2+3 connexions avec les sessions applicatives
+# provoque des `QueuePool limit ... timeout` (reproduit par
+# `tests/queue/test_concurrency.py`, 8 workers). `NullPool` : chaque heartbeat ouvre puis
+# referme sa propre connexion physique, sans jamais disputer le pool applicatif — le budget
+# de connexions Neon (dette documentée, `AGENTS.md`/plan §3-C) reste à surveiller au premier
+# déploiement, mais un heartbeat est bref (un `UPDATE` d'une ligne) et peu fréquent par
+# rapport au trafic applicatif.
+heartbeat_engine = create_engine(settings.database_url, poolclass=NullPool, future=True)
 
 
 def get_db() -> Generator[Session]:

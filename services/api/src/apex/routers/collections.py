@@ -12,7 +12,6 @@ les composer ni les publier.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Security
 from sqlalchemy import select
@@ -22,6 +21,7 @@ from sqlalchemy.orm import Session
 from apex.db import get_db
 from apex.models.catalog import Client
 from apex.models.collection import Collection, CollectionItem
+from apex.models.media import Media
 from apex.models.shooting import Shooting
 from apex.routers._common import bearer_scheme, not_implemented
 from apex.schemas.billing import (
@@ -38,6 +38,7 @@ from apex.schemas.collection import (
     CollectionOut,
 )
 from apex.schemas.common import Page
+from apex.schemas.search import FromSearchFilters
 from apex.security import CurrentUser
 from apex.services import access
 from apex.services.facets import SearchFilters, collect_media_ids
@@ -133,45 +134,32 @@ def get_collection(
     return _collection_out(db, collection)
 
 
-def _filters_from_payload(payload: dict[str, Any]) -> SearchFilters:
+def _filters_from_payload(payload: FromSearchFilters) -> SearchFilters:
     """`from_search` porte les **mêmes paramètres** que `GET /search` (contrat §3-K), en
-    JSON plutôt qu'en query string — parsing défensif, une clé absente vaut `None`.
+    JSON plutôt qu'en query string.
+
+    Revue J2 (🟡 12) : `payload` est désormais un `FromSearchFilters` (Pydantic) plutôt
+    qu'un `dict[str, Any]` — un champ mal typé est refusé en `422` par FastAPI avant même
+    d'atteindre cette fonction, jamais un `500` en aval de `services/facets.py`.
     """
-
-    def _dt(key: str) -> datetime | None:
-        value = payload.get(key)
-        if value is None:
-            return None
-        try:
-            return datetime.fromisoformat(str(value))
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "code": "invalid_datetime",
-                    "message": f"« from_search.{key} » : date/heure ISO 8601 attendue.",
-                    "detail": {"param": key, "value": value},
-                },
-            ) from exc
-
     return SearchFilters(
-        q=payload.get("q"),
-        shooting_id=payload.get("shooting_id"),
-        client_id=payload.get("client_id"),
-        team_id=payload.get("team_id"),
-        driver_id=payload.get("driver_id"),
-        car_number=payload.get("car_number"),
-        circuit_id=payload.get("circuit_id"),
-        camera_id=payload.get("camera_id"),
-        lens=payload.get("lens"),
-        iso_min=payload.get("iso_min"),
-        iso_max=payload.get("iso_max"),
-        focal_min=payload.get("focal_min"),
-        focal_max=payload.get("focal_max"),
-        date_from=_dt("date_from"),
-        date_to=_dt("date_to"),
-        status=payload.get("status"),
-        series=payload.get("series", "collapsed"),
+        q=payload.q,
+        shooting_id=payload.shooting_id,
+        client_id=payload.client_id,
+        team_id=payload.team_id,
+        driver_id=payload.driver_id,
+        car_number=payload.car_number,
+        circuit_id=payload.circuit_id,
+        camera_id=payload.camera_id,
+        lens=payload.lens,
+        iso_min=payload.iso_min,
+        iso_max=payload.iso_max,
+        focal_min=payload.focal_min,
+        focal_max=payload.focal_max,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        status=payload.status,
+        series=payload.series,
     )
 
 
@@ -204,6 +192,16 @@ def add_collection_items(
             },
         )
 
+    if not media_ids:
+        return CollectionAddItemsResponse(added=0, skipped_duplicates=0)
+
+    # Revue J2 (🟡 13) : `media_ids` explicite peut viser un id inexistant —
+    # `on_conflict_do_nothing(index_elements=["collection_id", "media_id"])` ne couvre que
+    # les doublons, pas une violation de la FK vers `media` (`500` reproduit). Filtré ici
+    # plutôt que rattrapé après coup : un id inconnu est silencieusement ignoré, comme un
+    # doublon — jamais une raison de faire échouer le reste du lot.
+    existing_media_ids = set(db.execute(select(Media.id).where(Media.id.in_(media_ids))).scalars())
+    media_ids = [mid for mid in media_ids if mid in existing_media_ids]
     if not media_ids:
         return CollectionAddItemsResponse(added=0, skipped_duplicates=0)
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampIndex,
+  computeQueueProgress,
   nextUndecidedIndex,
   resolveBatchTargets,
   stageDecisions,
@@ -110,5 +111,39 @@ describe("lib/review/batch — navigation clavier", () => {
     expect(clampIndex(10, 4)).toBe(3);
     expect(clampIndex(2, 4)).toBe(2);
     expect(clampIndex(2, 0)).toBe(0);
+  });
+});
+
+describe("lib/review/batch — computeQueueProgress (revue J2 🟠7)", () => {
+  it("calcule la fraction traitée quand numérateur et dénominateur partagent la même population", () => {
+    // Scénario exact de la revue : 20 candidats sur le shooting filtré au départ, 15 restants
+    // après envoi d'un lot — la barre doit avancer d'un quart, pas rester vide.
+    expect(computeQueueProgress(20, 15)).toBeCloseTo(0.25);
+  });
+
+  it("reproduit le bug de la revue si on lui passe malgré tout un `remaining` d'une autre population", () => {
+    // Avant correction : `initialRemaining` scopé au shooting (20) mais `remainingTotal`
+    // renvoyé global (379 sur 384 au total) — la fraction part dans le négatif. La fonction
+    // elle-même ne peut pas détecter ce décalage de population (ce n'est pas son rôle : la
+    // correction est côté plomberie, § `resources/review.ts::decide`), mais elle doit au
+    // moins ne jamais afficher une barre qui déborde de [0, 1] dans ce cas.
+    const buggy = computeQueueProgress(20, 379);
+    expect(buggy).toBe(0); // bornée à 0, jamais négative malgré le décalage de population
+  });
+
+  it("vaut 1 (file terminée) quand le dénominateur de départ est nul ou négatif", () => {
+    expect(computeQueueProgress(0, 0)).toBe(1);
+  });
+
+  it("reste bornée à 0 (jamais négative) si le restant dépasse le total de départ (nouveaux candidats apparus en session)", () => {
+    expect(computeQueueProgress(10, 12)).toBe(0);
+  });
+
+  it("vaut 0 en tout début de file (rien encore traité)", () => {
+    expect(computeQueueProgress(384, 384)).toBe(0);
+  });
+
+  it("vaut 1 quand la file filtrée est intégralement vidée", () => {
+    expect(computeQueueProgress(20, 0)).toBe(1);
   });
 });

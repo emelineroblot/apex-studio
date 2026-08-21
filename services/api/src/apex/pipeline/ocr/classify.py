@@ -42,8 +42,9 @@ le prescrit le plan.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, case, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -181,6 +182,66 @@ def project_media_batch(
 def project_media(session: Session, media: Media, ocr_settings: OcrSettings) -> ProjectionResult:
     """Projection d'un seul média — enveloppe de `project_media_batch`."""
     return project_media_batch(session, [media.id], ocr_settings)
+
+
+def reconcile_unlinked_attachment_status(session: Session, media_ids: list[int]) -> int:
+    """Filet de sécurité (revue J2, 🟠 n°2) : remet à plat `attachment_status` pour tout
+    média de `media_ids` encore marqué `engagement_attached` alors qu'il ne porte plus
+    **aucun** `media_engagement` — cas qu'`_recompute_attachment_status` ne voit jamais
+    puisqu'il tourne à l'intérieur de `project_media_batch`, lequel ignore tout média sans
+    candidat OCR ni lien `source='ocr'` (§ sa docstring). C'est exactement le cas d'un
+    rattachement **manuel** (`source='human'`, aucun candidat) dont l'engagement source
+    vient d'être supprimé (`DELETE /engagements/{id}`, cascade sur `media_engagement`) :
+    sans ce filet, le média reste indéfiniment `engagement_attached` avec zéro rattachement,
+    et `/media` comme `/search` continuent de l'afficher rattaché. Renvoie le nombre de
+    médias corrigés.
+    """
+    ids = list({int(i) for i in media_ids})
+    if not ids:
+        return 0
+    linked_ids = {
+        int(row)
+        for row in session.execute(
+            select(MediaEngagement.media_id).where(MediaEngagement.media_id.in_(ids)).distinct()
+        ).scalars()
+    }
+    orphaned_ids = [i for i in ids if i not in linked_ids]
+    if not orphaned_ids:
+        return 0
+    medias = (
+        session.execute(
+            select(Media).where(
+                Media.id.in_(orphaned_ids), Media.attachment_status == "engagement_attached"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for media in medias:
+        media.attachment_status = (
+            "shooting_attached" if media.shooting_id is not None else "unattached"
+        )
+    return len(medias)
+
+
+def media_ids_with_reprojectable_candidates(session: Session, shooting_id: int) -> list[int]:
+    """Médias d'un shooting portant un candidat OCR encore « machine » (§ `HUMAN_RESOLUTIONS`,
+    terminal exclu) — y compris `not_engaged` (numéro absent des engagements au moment de la
+    lecture). Utilisé après une mutation du référentiel qui peut changer la réponse à
+    « ce numéro est-il engagé ? » (revue J2, 🟠 n°2) : import CSV, création/correction d'un
+    engagement. Sans reprojection, un `not_engaged` devenu valide reste bloqué dans le bac
+    « incohérences » alors que l'engagement qui le justifierait existe désormais.
+    """
+    rows = session.execute(
+        select(MediaOcrCandidate.media_id)
+        .join(Media, Media.id == MediaOcrCandidate.media_id)
+        .where(
+            Media.shooting_id == shooting_id,
+            MediaOcrCandidate.resolution.not_in(HUMAN_RESOLUTIONS),
+        )
+        .distinct()
+    ).scalars()
+    return [int(r) for r in rows]
 
 
 def _resolve_candidates(
@@ -373,51 +434,71 @@ def current_distribution(session: Session) -> Distribution:
     )
 
 
+#: Portée d'un candidat réellement **projetable** — ce que `_resolve_candidates` touche
+#: quand `project_media_batch` tourne (revue J2, 🟠 n°5). Un candidat en dehors de cette
+#: portée garde sa résolution courante, quel que soit le seuil simulé :
+#: - `HUMAN_RESOLUTIONS` (`accepted`/`rejected`) : terminal, jamais réécrit.
+#: - un média `ingest_status == 'quarantined'` : `project_media_batch` l'ignore explicitement
+#:   (« un média en quarantaine n'a pas de dérivé fiable, jamais muté ») — la simulation
+#:   l'incluait pourtant dans ses calculs, un premier écart trouvé en écrivant ce correctif.
+def _candidate_scope(*, media_ingest_status: Any, resolution: Any) -> ColumnElement[bool]:
+    return and_(resolution.not_in(HUMAN_RESOLUTIONS), media_ingest_status != "quarantined")
+
+
 def simulate_distribution(session: Session, *, high: float, low: float) -> Distribution:
     """Ce que donneraient ces seuils, **sans rien écrire ni ré-inférer**.
 
-    Transcription en SQL de `decide()`, avec une seule subtilité : c'est `engagement_id`,
-    et non la résolution courante, qui dit si le numéro a été retrouvé au plateau. C'est
-    volontaire — la résolution est justement ce que la simulation fait varier, elle ne peut
-    pas servir d'entrée. `engagement_id`, lui, est un **fait** posé par la projection
-    (§`_resolve_candidates`) : indépendant des seuils, donc stable sous simulation.
+    Revue J2 (🟠 n°5) : l'ancienne version excluait purement et simplement les candidats
+    d'un média sans shooting (`Media.shooting_id IS NULL`) de la simulation, alors que
+    `_resolve_candidates` les force en **abstention** (jamais silencieusement ignorés).
+    Scénario reproduit : un recalage d'horloge détache 400 photos de leur shooting —
+    `GET /settings/ocr` (état réel, `current_distribution`) affiche `abstain: 411`,
+    l'aperçu de `PUT /settings/ocr` n'en comptait que `11`, et la redistribution réelle qui
+    suit redonne `411`. La simulation était vendue comme exacte, pas indicative.
+
+    Une seule expression `CASE`, transcription directe de `_resolve_candidates` (portée
+    `_candidate_scope` ci-dessus, puis `decide()`) plutôt que quatre `FILTER` disjoints
+    reconstruits à la main — la même classe d'écart (une seconde formulation d'une règle déjà
+    écrite ailleurs) que celle refermée pour le cloisonnement de rôle (🟠 n°4) : ici la
+    correction porte sur la portée « candidats projetables », partagée par la lecture
+    (`current_distribution`, via le passage direct de la résolution courante) et
+    l'écriture réelle.
+
+    `engagement_id` (et non la résolution courante) dit si le numéro a été retrouvé au
+    plateau : c'est un **fait** posé par la projection précédente (§`_resolve_candidates`),
+    indépendant des seuils, donc stable sous simulation — la résolution, elle, est justement
+    ce que la simulation fait varier, elle ne peut pas servir d'entrée.
 
     Précondition, garantie par construction : tout candidat persisté a déjà été projeté au
     moins une fois — `handle_ocr_media` insère et projette dans la **même** transaction,
     il n'existe jamais de candidat « brut, non résolu » visible d'une autre transaction.
     """
-    resolvable = MediaOcrCandidate.resolution.not_in(HUMAN_RESOLUTIONS)
-    matched = MediaOcrCandidate.engagement_id.is_not(None)
-    in_band = and_(resolvable, matched)
+    resolution = MediaOcrCandidate.resolution
     confidence = MediaOcrCandidate.confidence
-    row = session.execute(
-        select(
-            func.count().filter(
-                or_(
-                    MediaOcrCandidate.resolution == RESOLUTION_ACCEPTED,
-                    and_(in_band, confidence >= high),
-                )
-            ),
-            func.count().filter(and_(in_band, confidence >= low, confidence < high)),
-            func.count().filter(
-                or_(
-                    MediaOcrCandidate.resolution == RESOLUTION_REJECTED,
-                    and_(in_band, confidence < low),
-                )
-            ),
-            # Hors bande de seuils par construction : aucun réglage ne rend engagée une
-            # voiture qui n'est pas au départ.
-            func.count().filter(and_(resolvable, MediaOcrCandidate.engagement_id.is_(None))),
-        )
+    scope = _candidate_scope(media_ingest_status=Media.ingest_status, resolution=resolution)
+    bucket = case(
+        # Hors portée : la résolution courante ne bouge pas, quel que soit le seuil.
+        (~scope, resolution),
+        # Sans shooting, aucune table d'engagements à interroger — abstention
+        # inconditionnelle, jamais un score qui déciderait à sa place.
+        (Media.shooting_id.is_(None), RESOLUTION_ABSTAIN),
+        # Hors bande de seuils par construction : aucun réglage ne rend engagée une voiture
+        # qui n'est pas au départ.
+        (MediaOcrCandidate.engagement_id.is_(None), RESOLUTION_NOT_ENGAGED),
+        (confidence >= high, RESOLUTION_AUTO),
+        (confidence >= low, RESOLUTION_REVIEW),
+        else_=RESOLUTION_ABSTAIN,
+    )
+    rows = session.execute(
+        select(bucket, func.count())
         .select_from(MediaOcrCandidate)
         .join(Media, Media.id == MediaOcrCandidate.media_id)
-        .where(
-            or_(
-                Media.shooting_id.is_not(None),
-                MediaOcrCandidate.resolution.in_(HUMAN_RESOLUTIONS),
-            )
-        )
-    ).one()
+        .group_by(bucket)
+    ).all()
+    counts = {str(row[0]): int(row[1]) for row in rows}
     return Distribution(
-        auto=int(row[0]), review=int(row[1]), abstain=int(row[2]), not_engaged=int(row[3])
+        auto=counts.get(RESOLUTION_AUTO, 0) + counts.get(RESOLUTION_ACCEPTED, 0),
+        review=counts.get(RESOLUTION_REVIEW, 0),
+        abstain=counts.get(RESOLUTION_ABSTAIN, 0) + counts.get(RESOLUTION_REJECTED, 0),
+        not_engaged=counts.get(RESOLUTION_NOT_ENGAGED, 0),
     )

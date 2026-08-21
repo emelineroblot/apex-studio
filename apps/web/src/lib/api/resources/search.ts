@@ -20,6 +20,11 @@ export type SearchParams = {
   date_from?: string | null;
   date_to?: string | null;
   status?: AttachmentStatus[];
+  /** §3-N.1 / revue J2 🟠1 — `GET /search?is_simulated=`, absent du contrat régénéré au
+   * moment de cette correction (backend en cours d'ajout, § `implementation.md`) : paramètre
+   * de requête libre (`apiRequest.query` n'est pas typé depuis `schema.d.ts`), câblé par
+   * anticipation du contrat documenté plutôt que deviné à l'aveugle. */
+  is_simulated?: boolean | null;
   series?: SeriesMode;
   sort?: SortMode;
   cursor?: string | null;
@@ -52,6 +57,7 @@ export async function search(params: SearchParams = {}): Promise<SearchResponse>
       date_from: params.date_from,
       date_to: params.date_to,
       status: params.status,
+      is_simulated: params.is_simulated,
       series: params.series,
       sort: params.sort,
       cursor: params.cursor,
