@@ -62,10 +62,21 @@ def _fingerprint(session: Session) -> str:
 
 
 @pytest.fixture
-def small_seed(monkeypatch: pytest.MonkeyPatch):
-    """Patch le volume pour un test de déterminisme rapide (§ docstring de module)."""
+def small_seed(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Patch le volume pour un test de déterminisme rapide (§ docstring de module).
+
+    Isole aussi `real_photos_dir` sur un répertoire vide (§ sourcing des photos réelles,
+    `.agent-team/implementation.md`, Backend) : `settings.real_photos_dir` par défaut
+    (`./demo-photos`) résout, quand `pytest` tourne depuis `services/api`, vers **le même
+    dossier** que celui peuplé par `scripts/source_demo_photos.py`. Sans cette isolation,
+    ces tests de déterminisme/probité ingéreraient les ~300 photos réelles à chaque appel
+    — lent, et surtout faux pour `TestProbity` (`total == simulated` ne tiendrait plus).
+    Les tests qui veulent vraiment des photos réelles écrasent ce chemin explicitement
+    après coup (§ `TestRealPhotosAreReassignedToADemoShootingWhenTheirGenuineExifMisses`).
+    """
     monkeypatch.setattr(seed_module, "SHOOTING_COUNT", 3)
     monkeypatch.setattr(seed_module, "TARGET_SIMULATED_MEDIA", 180)
+    monkeypatch.setattr(seed_module.settings, "real_photos_dir", str(tmp_path / "no-real-photos"))
     yield
 
 
@@ -157,6 +168,51 @@ class TestProbity:
         db_session.commit()
         assert result.real_media == 0
         assert result.real_photos_skipped_reason is not None
+
+
+class TestRealPhotosAreReassignedToADemoShootingWhenTheirGenuineExifMisses:
+    """§ `.agent-team/implementation.md` (Backend, sourcing des photos réelles).
+
+    Une photo réelle porte une date de prise de vue authentique (parfois des années avant
+    que le jeu de démo n'existe) — elle ne recoupe donc quasiment jamais la fenêtre d'un
+    shooting généré relativement à « maintenant ». Sans le correctif round-robin de
+    `_ingest_real_photos`, ces photos resteraient perpétuellement dans le bac « à
+    rattacher » et l'OCR ne les lirait jamais (`ocr_media` ignore `shooting_id is None`).
+    """
+
+    def test_a_real_photo_with_an_old_exif_date_still_gets_attached_and_queued_for_ocr(
+        self, db_session: Session, small_seed, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.support.images import make_valid_jpeg
+
+        real_dir = tmp_path / "demo-photos"
+        real_dir.mkdir()
+        # Date authentique très antérieure à toute fenêtre de shooting générée
+        # (`_create_shootings` : les 120 derniers jours autour de « maintenant »).
+        (real_dir / "0000_old_race.jpg").write_bytes(
+            make_valid_jpeg(shot_at="2015:06:14 10:30:00", serial="REAL001")
+        )
+        monkeypatch.setattr(seed_module.settings, "real_photos_dir", str(real_dir))
+
+        result = seed_module.run_seed(db_session, reset=True)
+        db_session.commit()
+
+        assert result.real_media == 1
+        media = db_session.execute(select(Media).where(Media.is_simulated.is_(False))).scalar_one()
+        # La date authentique est préservée telle quelle...
+        assert media.shot_at_exif is not None
+        assert media.shot_at_exif.year == 2015
+        # ...mais l'opérationnelle (`shot_at`) a été replacée dans un shooting du jeu pour
+        # que le reste du pipeline (OCR, engagements) soit démontrable.
+        assert media.shooting_id is not None
+        assert media.attachment_status == "shooting_attached"
+        assert media.attachment_source == "pipeline_time"
+
+        from apex.models.job import Job
+
+        ocr_jobs = db_session.execute(select(Job).where(Job.kind == "ocr_media")).scalars().all()
+        assert any(job.payload.get("media_id") == media.id for job in ocr_jobs)
+        assert all(job.status == "pending" for job in ocr_jobs)
 
 
 class TestFullVolumeMatchesThePlanTargets:

@@ -56,7 +56,7 @@ from sqlalchemy.orm import Session
 from apex.config import settings
 from apex.demo.accounts import ensure_demo_users
 from apex.models.catalog import Camera, Circuit, Client, Driver, Team
-from apex.models.media import Media, MediaEngagement, MediaSeries, UploadBatch
+from apex.models.media import Media, MediaEngagement, MediaSeries, PipelineEvent, UploadBatch
 from apex.models.search import MediaOcrCandidate
 from apex.models.setting import AppSetting
 from apex.models.shooting import Engagement, Shooting, ShootingStaff
@@ -904,7 +904,9 @@ def _ingest_real_photos(
     if not files:
         return 0, f"« {real_dir} » vide — jeu synthétique uniquement (prérequis non bloquant)."
 
+    from apex.pipeline import attach_time
     from apex.pipeline.ingest import run_ingest_media
+    from apex.queue.enqueue import enqueue
     from apex.services.storage import incoming_key
 
     batch = UploadBatch(created_by=photographer.id, expected_count=len(files), status="processing")
@@ -933,6 +935,68 @@ def _ingest_real_photos(
         session.add(media)
         session.flush()
         run_ingest_media(session, media, storage, job_id=None, studio_name="Studio Chicane")
+
+        # Photos réelles : leur date de prise de vue authentique (des courses réellement
+        # disputées — parfois des années plus tôt — préservée telle quelle dans
+        # `shot_at_exif`) ne tombe quasiment jamais dans la fenêtre d'un shooting fictif
+        # généré relativement à « maintenant » (§3-N.1) : « Studio Chicane » n'existait pas
+        # au moment de ces prises de vue. Sans correctif, `attach_media_by_time` (ci-dessus,
+        # dans `run_ingest_media`) laisse donc systématiquement ces médias dans le bac
+        # « à rattacher », et `queue/handlers/ocr_media.py` les ignore ensuite
+        # (`shooting_id is None` → skip `no_shooting`) : le jeu réel ne démontrerait jamais
+        # le cœur du jalon J2 (OCR + recoupement engagements), alors que son sourcing cible
+        # précisément des numéros de course lisibles dans ce but (§ décision documentée dans
+        # `.agent-team/implementation.md`, section Backend — signalé pour arbitrage).
+        #
+        # Correctif volontairement minimal, appliqué seulement quand le rattachement
+        # naturel a échoué : répartition round-robin sur les shootings du jeu (déjà générés
+        # à cet instant), en ne touchant que `media.shot_at` — jamais `shot_at_exif`, qui
+        # reste la date réellement lue dans le fichier (§ docstring d'`ingest.py`,
+        # « shot_at_exif reste distinct »). `attach_media_by_time` rattache alors la photo
+        # par son mécanisme habituel : `attachment_source='pipeline_time'` reste donc
+        # littéralement vrai, pas une valeur inventée hors de l'énumération fermée.
+        if media.ingest_status == "ingested" and media.shooting_id is None and shootings:
+            shooting = shootings[i % len(shootings)]
+            duration_seconds = (shooting.ends_at - shooting.starts_at).total_seconds()
+            offset_seconds = min((i * 47) % 3000, max(duration_seconds - 1, 0))
+            media.shot_at = shooting.starts_at + timedelta(seconds=offset_seconds)
+            attach_time.attach_media_by_time(session, media)
+            session.add(
+                PipelineEvent(
+                    media_id=media.id,
+                    batch_id=batch.id,
+                    job_id=None,
+                    step="attach_time_demo_reassign",
+                    status="ok" if media.shooting_id is not None else "skipped",
+                    duration_ms=0,
+                    message=(
+                        f"photo réelle réassignée au shooting démo #{shooting.id} "
+                        "(EXIF authentique hors plage — § implementation.md)"
+                    ),
+                )
+            )
+
+        # §3-F.1, étape 9 (J2) : même règle que `queue/handlers/ingest_media.py` — seule
+        # une photo *réellement* rattachée à un shooting est envoyée à l'OCR. Contrairement
+        # aux médias simulés (candidats `media_ocr_candidate` fabriqués directement, §3-N.1
+        # — aucun besoin d'inférence sur une image générée), une photo réelle doit
+        # traverser le **vrai** moteur RapidOCR : c'est tout l'intérêt de ce jeu. `run_seed`
+        # ne drainant pas la file lui-même, ce job attend le prochain tick du worker
+        # (`apex.cli worker --once`/`--loop`) — voir la vérification de bout en bout dans
+        # `.agent-team/implementation.md`.
+        if (
+            media.ingest_status == "ingested"
+            and media.duplicate_of_media_id is None
+            and media.shooting_id is not None
+        ):
+            enqueue(
+                session,
+                "ocr_media",
+                {"media_id": media.id},
+                dedupe_key=f"ocr:{media.id}",
+                priority=110,
+            )
+
         project_media_search(session, [media.id])
         ingested += 1
     batch.received_count = ingested
