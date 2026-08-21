@@ -99,9 +99,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 /** Fichier binaire authentifié (vignette, aperçu, HD) — accès toujours médié par le backend. */
 export async function apiFetchBlob(
   path: string,
-  options: { skipAuth?: boolean } = {},
+  options: { skipAuth?: boolean; headers?: Record<string, string> } = {},
 ): Promise<Blob> {
-  const finalHeaders: Record<string, string> = {};
+  // `headers` explicites : l'espace client (`/public/**`) porte son propre jeton de
+  // session et ne doit **jamais** emprunter celui du back-office via `getToken()`.
+  const finalHeaders: Record<string, string> = { ...(options.headers ?? {}) };
   if (!options.skipAuth) {
     const token = getToken();
     if (token) finalHeaders["Authorization"] = `Bearer ${token}`;
