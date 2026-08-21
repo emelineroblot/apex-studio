@@ -39,7 +39,6 @@ describe("session client — cloisonnée du back-office", () => {
         email: "owner@apex.test",
         role: "owner",
         full_name: "Propriétaire",
-        is_active: true,
       },
     });
     setClientSession("lien-abc", session(60_000));
