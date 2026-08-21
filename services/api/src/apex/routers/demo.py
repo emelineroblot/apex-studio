@@ -13,9 +13,11 @@ from apex.config import settings
 from apex.db import get_db
 from apex.demo.accounts import demo_account_specs
 from apex.queue.enqueue import enqueue, enqueue_unique_pending
-from apex.routers._common import bearer_scheme, not_implemented
+from apex.routers._common import bearer_scheme
 from apex.schemas.auth import DemoAccount
 from apex.schemas.billing import DemoResetResponse
+from apex.security import CurrentUser
+from apex.services import access
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -83,5 +85,27 @@ def demo_seed(
     summary="Réinitialisation nocturne — `owner` uniquement (J3)",
     dependencies=[Security(bearer_scheme)],
 )
-def demo_reset() -> DemoResetResponse:
-    not_implemented("POST /demo/reset")
+def demo_reset(user: CurrentUser, db: Session = Depends(get_db)) -> DemoResetResponse:
+    """Bouton « remettre la démo à neuf » du dirigeant.
+
+    **Ce que `require_owner` protège ici, et ce qu'il ne protège pas.** Le mot de passe
+    `owner` est publié en clair par `GET /demo/accounts` (self-service assumé, §3-I) :
+    n'importe quel visiteur peut donc atteindre cette route. C'est acceptable pour
+    celle-ci, et pour elle seule — elle *restaure* l'état nominal au lieu de le détruire,
+    et l'environnement est jetable par conception. `POST /demo/seed?reset=true`, qui
+    tronque 25 tables, reste protégée par un secret serveur (revue J2, bloquant n°3) : la
+    différence entre les deux, c'est qu'un reset mal venu coûte quelques minutes de démo,
+    pas des données.
+
+    Le `dedupe_key` empêche l'empilement : cliquer dix fois ne met qu'un seul reset en file.
+    """
+    access.require_owner(user, message="Seul le dirigeant peut réinitialiser la démonstration.")
+    job_id = enqueue(db, "demo_reset", {"reset": True}, dedupe_key="demo_reset", priority=10)
+    if job_id is None:
+        # Un reset est déjà en file : on renvoie le sien plutôt que d'en créer un second.
+        job_id = enqueue_unique_pending(db, "demo_reset", "demo_reset")
+    if job_id is None:
+        job_id = enqueue(db, "demo_reset", {"reset": True}, priority=10)
+    assert job_id is not None
+    db.commit()
+    return DemoResetResponse(job_id=job_id)

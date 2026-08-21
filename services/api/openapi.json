@@ -157,6 +157,7 @@
           "demo"
         ],
         "summary": "Réinitialisation nocturne — `owner` uniquement (J3)",
+        "description": "Bouton « remettre la démo à neuf » du dirigeant.\n\n**Ce que `require_owner` protège ici, et ce qu'il ne protège pas.** Le mot de passe\n`owner` est publié en clair par `GET /demo/accounts` (self-service assumé, §3-I) :\nn'importe quel visiteur peut donc atteindre cette route. C'est acceptable pour\ncelle-ci, et pour elle seule — elle *restaure* l'état nominal au lieu de le détruire,\net l'environnement est jetable par conception. `POST /demo/seed?reset=true`, qui\ntronque 25 tables, reste protégée par un secret serveur (revue J2, bloquant n°3) : la\ndifférence entre les deux, c'est qu'un reset mal venu coûte quelques minutes de démo,\npas des données.\n\nLe `dedupe_key` empêche l'empilement : cliquer dix fois ne met qu'un seul reset en file.",
         "operationId": "demo_reset_api_v1_demo_reset_post",
         "responses": {
           "200": {
@@ -3524,6 +3525,7 @@
           "billing"
         ],
         "summary": "Créer une facture brouillon depuis une sélection validée",
+        "description": "Même composition que le handler `refresh_draft_invoice`, déclenchée à la main.\n\nUtile quand le studio veut la facture avant que le worker ne soit passé, ou après\navoir ajusté un tarif. Le travail réel vit dans `services/invoicing.py` : une seule\nfaçon de composer une facture, quel que soit le point d'entrée.",
         "operationId": "create_invoice_from_selection_api_v1_invoices_from_selection__selection_id__post",
         "security": [
           {
@@ -3983,6 +3985,7 @@
           "billing"
         ],
         "summary": "Accepter le devis — crée le shooting correspondant",
+        "description": "Accepter, c'est **créer le shooting**, dans la même transaction.\n\nC'est tout l'intérêt métier de la route : la période et le client du devis deviennent\nla fenêtre temporelle qui rattachera automatiquement les photos (§3-F.3). Un devis\naccepté sans shooting obligerait à ressaisir les mêmes dates, avec le risque qu'elles\ndiffèrent d'une minute — et un décalage d'une minute, ici, ce sont des photos qui ne\nse rattachent pas.",
         "operationId": "accept_quote_api_v1_quotes__quote_id__accept_post",
         "security": [
           {
@@ -4128,7 +4131,7 @@
         ],
         "parameters": [
           {
-            "name": "from_",
+            "name": "from",
             "in": "query",
             "required": false,
             "schema": {
@@ -4140,7 +4143,7 @@
                   "type": "null"
                 }
               ],
-              "title": "From "
+              "title": "From"
             }
           },
           {
@@ -4190,6 +4193,7 @@
           "cron"
         ],
         "summary": "Déclencheur nocturne — enqueue seulement, n'exécute rien",
+        "description": "N'execute **rien** : met un `demo_reset` en file et repond `202`.\n\nContrainte de plateforme, pas choix de style : un cron Vercel Hobby dispose de 10\nsecondes, la ou un reset complet en demande plusieurs dizaines. Inserer une ligne\nprend quelques millisecondes ; le vrai travail se fait dans le worker, avec ses 300\nsecondes et son heartbeat (§3-N.2, Option 2).\n\nLe secret est compare a temps constant, comme `POST /jobs/tick` : un `!=` sur un\nsecret partage fuit sa longueur et son prefixe par le temps de reponse.",
         "operationId": "cron_nightly_api_v1_cron_nightly_post",
         "parameters": [
           {
