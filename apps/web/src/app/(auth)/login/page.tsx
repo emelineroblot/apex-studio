@@ -95,7 +95,7 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className={inputClassName("bg-ink-800 border-ink-700 text-white placeholder:text-ink-500")}
+                className={inputClassName(undefined, "dark")}
                 placeholder="prenom.nom@apex-studio.demo"
               />
             )}
@@ -111,7 +111,7 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className={inputClassName("bg-ink-800 border-ink-700 text-white placeholder:text-ink-500")}
+                className={inputClassName(undefined, "dark")}
               />
             )}
           </Field>

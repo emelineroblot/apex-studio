@@ -158,6 +158,9 @@ Deux projets Vercel (`apex-web` = `apps/web`, `apex-api` = `services/api`) et **
 Supabase** (PostgreSQL + Storage), comme Cardan. L'OCR est exécuté depuis un poste par
 `apex.cli worker --loop`, et la démonstration se remet à neuf à la main — **pas de cron**.
 
+**En ligne** : https://apex-web-emdigital.vercel.app (API :
+https://apex-api-emdigital.vercel.app), Supabase Francfort, fonctions en `fra1`.
+
 Deux chaînes de connexion, jamais interchangeables : `DATABASE_URL` (Transaction pooler,
 6543) pour l'API, `DATABASE_URL_DIRECT` (Session pooler, 5432) pour Alembic. Procédure complète,
 variables et limites connues : **`docs/deploiement.md`**.

@@ -5,6 +5,22 @@ maj: 2026-08-21
 
 # Journal des runs
 
+## 2026-08-22 — Première mise en ligne (`feature/deploiement-supabase`)
+Livré : la démonstration est en ligne — https://apex-web-emdigital.vercel.app — sur Supabase
+Francfort et deux projets Vercel en `fra1`. Jeu de démonstration complet (8 217 médias, dont
+300 photos réelles), et **34 vérifications de bout en bout rejouées contre l'instance
+déployée**, pas seulement en local.
+Le fait notable : trois pièges, tous invisibles en développement. Alembic écrit son URL dans
+un `ConfigParser` qui interprète `%`, donc tout mot de passe URL-encodé fait échouer la
+migration avant même la connexion. Un motif non ancré dans `.vercelignore` a supprimé
+`src/apex/models/` du téléversement — le `.gitignore` du dépôt portait déjà cette mise en
+garde. Et le `rewrite` Vercel copié de Cardan remplace le chemin vu par l'application, ce qui
+faisait répondre `404` à toutes les routes.
+Deuxième fait notable : `deferred=300` au premier drainage en ligne. La séparation des
+pilotes par capacité, conçue trois jours plus tôt sur une mesure de poids, se vérifie en
+production — la fonction Vercel laisse exactement les jobs qu'elle ne sait pas exécuter.
+Détail : `deploiement.md` (§ « Ce que le premier déploiement réel a appris »).
+
 ## 2026-08-21 — Bascule vers Supabase (`feature/deploiement-supabase`)
 Livré : base managée et stockage objet chez Supabase à la place de Neon + Cloudflare R2,
 deux chaînes de connexion distinctes (Transaction pooler pour l'API, Session pooler pour

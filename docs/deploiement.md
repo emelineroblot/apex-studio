@@ -10,6 +10,20 @@ rencontrés là-bas sont déjà pris en compte ici — ils sont signalés au fil
 > Ce document est opératoire (le *comment*). Les décisions et leurs raisons sont dans
 > `docs/wiki/architecture.md`.
 
+## En ligne
+
+| | |
+|---|---|
+| **Démonstration** | https://apex-web-emdigital.vercel.app |
+| **API** | https://apex-api-emdigital.vercel.app |
+| Base et stockage | Supabase `hvpfqzegwfnvrccjnhkf`, région `eu-central-1` (Francfort) |
+| Fonctions | Vercel région `fra1`, à côté de la base |
+
+Déployé le 2026-08-22. Parcours complet rejoué contre cette instance :
+`python scripts/verify_j3_flow.py https://apex-api-emdigital.vercel.app`, **34
+vérifications sur 34**. Les identifiants de démonstration sont publiés par
+`GET /api/v1/demo/accounts` — c'est voulu, l'écran de connexion s'en sert.
+
 ## Ce qui est déployé, et ce qui ne l'est pas
 
 | Où | Quoi |
@@ -60,10 +74,11 @@ Créer ensuite un bucket **privé** (`apex-media`) dans *Storage*, puis une pair
 *Storage → Settings → S3 connection*. L'endpoint se termine par `/storage/v1/s3` et la
 région est celle du projet — jamais `auto`, contrairement à Cloudflare R2.
 
-> Le backend S3 d'Apex (boto3) parle à l'endpoint S3-compatible de Supabase sans code
-> spécifique. **Non vérifié à ce jour** faute de compte : c'est le premier point à
-> contrôler après le déploiement (déposer un lot, ouvrir une vignette). En cas de blocage,
-> le repli est Cloudflare R2 — mêmes variables, aucun code à changer.
+> Le backend S3 d'Apex (boto3) parle à l'endpoint S3-compatible de Supabase **sans une
+> ligne de code spécifique** — vérifié le 2026-08-22 sur un aller-retour complet :
+> écriture, relecture comparée octet à octet, taille, existence, listing par préfixe,
+> écriture en flux, suppression. Cardan était passé par l'API REST Supabase ; ce détour
+> n'est pas nécessaire ici.
 
 ## 2. Les variables d'environnement
 
@@ -155,6 +170,24 @@ serait rétabli un jour. Pour l'activer, ajouter à `services/api/vercel.json` :
 ## Pas encore en place
 
 - **Le contrôle CI** qui régénère `openapi.json` et échoue sur un diff (plan §3-A.3).
-- **Le rewrite Vercel** n'a jamais été exécuté pour de vrai. Il reprend le motif de Cardan,
-  en production depuis le 21/08 : `/api/(.*)` → `/api/index`, toutes les routes d'Apex étant
-  sous `/api/`.
+- Rien d'autre : le déploiement est fait et vérifié de bout en bout.
+
+## Ce que le premier déploiement réel a appris
+
+- **Aucun `rewrite` ne doit être déclaré.** Le motif repris de Cardan
+  (`/api/(.*)` → `/api/index`) remplace le chemin vu par l'application : FastAPI recevait
+  `/api/index` et répondait `404` sur toutes ses routes. Le preset FastAPI de Vercel route
+  déjà l'intégralité des requêtes vers l'objet `app` en préservant le chemin.
+- **`regions: ["fra1"]` n'est pas cosmétique.** Sans lui, le premier déploiement est parti
+  en `iad1` (Washington), à côté d'une base à Francfort et d'un projet annoncé en
+  hébergement UE.
+- **La protection de déploiement est active par défaut** sur un projet d'équipe et couvre
+  toutes les URL `*.vercel.app` : une démonstration de portfolio reste inaccessible tant
+  qu'elle n'est pas levée (`ssoProtection: null` par l'API Vercel, ou dans les réglages du
+  projet).
+- **Le seed a demandé environ 17 minutes** contre Supabase, pour 8 217 médias — l'essentiel
+  du temps part dans l'envoi des fichiers, une requête réseau par objet. À lancer avant un
+  rendez-vous, jamais pendant.
+- **Les 300 photos réelles arrivent avec leur OCR en attente** (`deferred` dans
+  `GET /queue/stats`) : c'est la séparation des pilotes qui fonctionne comme prévu. Un
+  passage de `apex.cli worker --loop` depuis un poste les traite.

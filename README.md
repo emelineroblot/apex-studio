@@ -6,6 +6,9 @@ puis les livrer au client — dont la sélection alimente la facture.
 
 > Pièce de portfolio. Le studio, les clients et les données sont fictifs.
 
+**Démonstration en ligne : https://apex-web-emdigital.vercel.app** — les identifiants sont
+proposés sur l'écran de connexion.
+
 ## Le problème
 
 Un week-end de course produit 3 000 à 8 000 photos. Il faut les trier par écurie, par pilote
