@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,13 @@ from apex.models.shooting import Shooting
 from apex.queue.runner import drain
 from tests.conftest import auth_headers, make_user
 from tests.support.images import make_burst_frame, make_valid_jpeg
+
+#: Fuseau dans lequel le pipeline interprète un horodatage EXIF naïf (`exif.compute_shot_at`,
+#: fuseau porté par la caméra). Identique à `tests/pipeline/test_ingest_e2e.py` — **jamais**
+#: `.astimezone()` sans argument : ce dernier prend le fuseau de la machine, ce qui rend le
+#: test vert à Paris et rouge, de façon parfaitement reproductible, dans tout conteneur en UTC
+#: (constaté en vérifiant l'installation de production). Voir `docs/wiki/pieges-projet.md`.
+PARIS = ZoneInfo("Europe/Paris")
 
 
 def _drain_queue() -> None:
@@ -190,7 +198,7 @@ class TestListingCollapsesSeriesAndExcludesDuplicates:
         # fasse tomber un cliché juste avant `starts_at` (constaté en vérification :
         # `shot_at` tronqué à la seconde peut être antérieur de l'ordre de la milliseconde).
         starts_at = datetime.datetime.fromisoformat(shooting_ctx["shooting"]["starts_at"])
-        base = (starts_at + datetime.timedelta(seconds=2)).astimezone().replace(tzinfo=None)
+        base = (starts_at + datetime.timedelta(seconds=2)).astimezone(PARIS).replace(tzinfo=None)
         files = {
             f"listing-burst-{i}": make_burst_frame(
                 i, shot_at=base + datetime.timedelta(milliseconds=300 * i)
