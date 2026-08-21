@@ -5,6 +5,24 @@ maj: 2026-08-21
 
 # Journal des runs
 
+## 2026-08-21 — Préparation du déploiement (`feature/preparation-deploiement`)
+Livré : Python figé à 3.12, moteur OCR sorti des dépendances de production (extra `ocr`),
+`scripts/check_prod_install.sh` (installation `pip` réelle en conteneur Linux + mesure de
+poids), 300 photos réelles sourcées sous licences libres par un script reproductible, et la
+séparation des pilotes de la file par capacité d'exécution. Paquet déployable mesuré à
+**214,8 Mo pour un plafond de 250**. 232 tests verts.
+Le fait notable : deux jalons complets s'étaient succédé sans que **personne n'installe jamais
+le projet comme le fait la production** — `uv sync` acceptait sur Python 3.13 un moteur OCR qui
+n'y a jamais eu de roue, là où `pip` refuse net. Un environnement de développement qui marche ne
+dit rien d'une installation de production.
+Deuxième fait notable : le garde-fou écrit pour cela s'est cassé sur le changement suivant
+(`pipefail` + `pip show` d'un paquet devenu absent), et mourait sans message. Un garde-fou fait
+partie du périmètre du changement qu'il garde.
+Blackboard d'origine : `.agent-team/` (éphémère).
+Détail : `architecture.md#version-python-figée-à-312-et-validation-dinstallation-de-production`,
+`architecture.md#poids-dune-fonction-vercel-python--250-mo-mesurés-pas-supposés` et
+`architecture.md#séparation-des-pilotes-par-capacité-dexécution-détectée-et-non-configurée`.
+
 ## 2026-08-21 — J2, intelligence et recherche (`feature/ocr-recherche`)
 Livré : lecture du numéro de course par OCR embarqué (RapidOCR/ONNX, aucun service tiers), seuils
 configurables avec re-projection des candidats bruts sans ré-inférence, file de validation

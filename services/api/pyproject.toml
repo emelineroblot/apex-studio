@@ -2,16 +2,25 @@
 name = "apex-api"
 version = "0.1.0"
 description = "Apex — API et worker du studio photo motorsport (Studio Chicane)"
-requires-python = ">=3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
-    "uvicorn[standard]>=0.32",
+    # Sans l'extra `[standard]` (uvloop, httptools, websockets, watchfiles, pyyaml) :
+    # ~50 Mo à eux quatre, jamais exécutés en production — Vercel invoque l'objet `app`
+    # directement (`api/index.py`), le serveur ASGI d'uvicorn ne tourne jamais en
+    # serverless. L'extra reste nécessaire en local (`uv run uvicorn ... --reload`),
+    # couvert par le groupe `dev` ci-dessous.
+    "uvicorn>=0.32",
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",
     "alembic>=1.13",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
-    "python-jose[cryptography]>=3.3",
+    # Sans l'extra `[cryptography]` (~16 Mo) : le JWT du projet est HS256 exclusivement
+    # (`apex/security.py`), qui ne requiert aucun backend asymétrique — `python-jose` le
+    # supporte nativement sans dépendance supplémentaire (vérifié : `jwt.encode`/`decode`
+    # HS256 fonctionnent sans `cryptography` installé).
+    "python-jose>=3.3",
     # `bcrypt` en direct, pas `passlib[bcrypt]` (§3-I) : `passlib==1.7.4` sonde
     # `bcrypt.__about__.__version__`, retiré depuis `bcrypt>=4.1` — casse *avant* de
     # hacher (`AttributeError` puis `ValueError` trompeur), reproduit en conditions
@@ -22,7 +31,6 @@ dependencies = [
     "numpy>=2.1",
     "piexif>=1.1",
     "zipstream-ng>=1.8",
-    "rapidocr-onnxruntime>=1.3",
     "typer>=0.13",
     "python-multipart>=0.0.12",
     "email-validator>=2.2",
@@ -32,6 +40,20 @@ dependencies = [
     "faker>=30.8",
 ]
 
+[project.optional-dependencies]
+# Moteur OCR, dépendance **optionnelle** (§ Décision « Option 2 », docs/wiki/architecture.md,
+# « Le moteur OCR devient une dépendance optionnelle ») : `rapidocr-onnxruntime` et sa
+# fermeture (`opencv-python-headless`, `onnxruntime`, `shapely`, `pyclipper`) pèsent à eux
+# seuls ~322 Mo décompressés, mesuré — plus que le plafond entier d'une fonction Vercel
+# Python (250 Mo). Absent de `requirements.txt` (`uv export --no-dev`, sans `--extra ocr`) :
+# la fonction déployée ne l'installe jamais. Nécessaire partout où `ocr_media` doit
+# réellement s'exécuter : poste de développement (`uv sync --extra ocr`, désormais la
+# commande standard, voir AGENTS.md) et tout poste faisant tourner
+# `apex.cli worker --loop` en conditions réelles.
+ocr = [
+    "rapidocr-onnxruntime>=1.3",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",
@@ -39,6 +61,9 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "httpx>=0.27",
+    # Extra de confort pour `uv run uvicorn apex.main:app --reload` en local (rechargement
+    # à chaud, meilleures perfs de dev) — jamais exécuté en production, voir plus haut.
+    "uvicorn[standard]>=0.32",
 ]
 
 [build-system]
@@ -50,7 +75,7 @@ packages = ["src/apex"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -79,7 +104,7 @@ extend-immutable-calls = [
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.12"
 mypy_path = "src"
 explicit_package_bases = true
 plugins = ["pydantic.mypy"]

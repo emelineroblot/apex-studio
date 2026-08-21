@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from apex.config import settings
 from apex.db import SessionLocal, get_db
 from apex.models.job import Job
+from apex.queue.capabilities import available_capabilities
+from apex.queue.registry import unservable_kinds
 from apex.queue.runner import drain
 from apex.schemas.job import QueueStats, TickResponse
 from apex.security import CurrentUser
@@ -41,11 +43,26 @@ def queue_stats(user: CurrentUser, db: Session = Depends(get_db)) -> QueueStats:
     oldest_pending_age_s = (
         (datetime.now(UTC) - oldest_pending).total_seconds() if oldest_pending else None
     )
+    # Ce que cet environnement-ci ne sait pas exécuter (`queue/capabilities.py`) : nul sur
+    # un poste complet, égal aux `ocr_media` en attente vu depuis la fonction Vercel.
+    unservable = unservable_kinds(available_capabilities())
+    deferred = (
+        int(
+            db.execute(
+                select(func.count())
+                .select_from(Job)
+                .where(Job.status == "pending", Job.kind.in_(unservable))
+            ).scalar_one()
+        )
+        if unservable
+        else 0
+    )
     return QueueStats(
         pending=counts.get("pending", 0),
         running=counts.get("running", 0),
         dead=counts.get("dead", 0),
         oldest_pending_age_s=oldest_pending_age_s,
+        deferred=deferred,
     )
 
 

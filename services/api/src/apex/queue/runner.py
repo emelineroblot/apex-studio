@@ -9,6 +9,14 @@ Un seul module, plusieurs pilotes (§3-E.7) :
   chaque enqueue depuis l'API (§3-E.7 (a)), pour que le résultat soit démontrable en ligne
   sans attendre le prochain polling.
 
+**Les pilotes n'ont plus tous les mêmes capacités.** Depuis la préparation du déploiement,
+les trois pilotes HTTP tournent dans une fonction Vercel qui n'embarque pas le moteur OCR
+(trop lourd pour le plafond de 250 Mo — `docs/wiki/architecture.md`), là où le pilote CLI
+tourne sur un poste qui l'a. `drain()` détecte donc ce que *ce* processus sait faire
+(`queue.capabilities`) et exclut de la réclamation les types de jobs qu'il ne peut pas
+exécuter (`registry.unservable_kinds`). Ces jobs restent `pending`, comptés dans `deferred` :
+un pilote incapable les laisse pour un pilote capable, il ne les échoue pas.
+
 Trois garanties de non-double-traitement superposées (§3-E.4) — les deux dernières ont été
 corrigées en revue J1 (🔴 n°3) :
 1. `FOR UPDATE SKIP LOCKED` + commit immédiat (`claim.claim_batch`).
@@ -36,9 +44,10 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from apex.models.job import Job
+from apex.queue.capabilities import available_capabilities
 from apex.queue.claim import claim_batch, reap_stale, release_unclaimed
 from apex.queue.claim import heartbeat as refresh_heartbeat
-from apex.queue.registry import JobContext, get_handler
+from apex.queue.registry import JobContext, get_handler, unservable_kinds
 
 # Backoff des échecs récupérables (§3-E.2) : 5 s, 30 s, 120 s, puis `dead` au-delà de
 # `max_attempts`. Indexé par `attempts` (1 = première tentative déjà consommée par
@@ -60,6 +69,9 @@ class DrainResult:
     reaped: int = 0
     released: int = 0
     remaining: int = 0
+    #: Jobs `pending` dus qu'un pilote plus capable devra traiter — **sous-ensemble de
+    #: `remaining`**, pas un compteur disjoint. Zéro sur un worker complet.
+    deferred: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_tick_response(self) -> dict[str, int]:
@@ -69,6 +81,7 @@ class DrainResult:
             "done": self.done,
             "failed": self.failed + self.dead,
             "remaining": self.remaining,
+            "deferred": self.deferred,
         }
 
 
@@ -79,6 +92,14 @@ def _backoff_seconds(attempts: int) -> int:
 
 def _count_remaining(session: Session) -> int:
     stmt = select(func.count()).select_from(Job).where(Job.status == "pending")
+    return int(session.execute(stmt).scalar_one())
+
+
+def _count_deferred(session: Session, kinds: tuple[str, ...]) -> int:
+    """Jobs `pending` que ce pilote a volontairement laissés — `0` s'il sait tout faire."""
+    if not kinds:
+        return 0
+    stmt = select(func.count()).select_from(Job).where(Job.status == "pending", Job.kind.in_(kinds))
     return int(session.execute(stmt).scalar_one())
 
 
@@ -232,13 +253,21 @@ def drain(
     *,
     deadline: datetime | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    excluded_kinds: tuple[str, ...] | None = None,
 ) -> DrainResult:
     """Draine la file jusqu'à épuisement ou `deadline` (§3-E.7) — jamais indéfiniment.
 
     `deadline=None` : draine jusqu'à épuisement de la file puis s'arrête (usage : un
     tick « once »). Ne poll **jamais** en boucle infinie ici — c'est le pilote CLI
     (`--loop`) qui répète les appels avec un sommeil à vide, jamais ce module.
+
+    `excluded_kinds=None` (défaut) : déduit des capacités réelles du processus courant —
+    aucun pilote n'a à savoir quoi exclure, ni à être configuré pour. Un tuple explicite
+    (y compris vide) court-circuite la détection : réservé aux tests, qui doivent pouvoir
+    simuler un environnement sans dépendre de ce qui est installé sur la machine.
     """
+    if excluded_kinds is None:
+        excluded_kinds = unservable_kinds(available_capabilities())
     session = session_factory()
     result = DrainResult()
     try:
@@ -248,7 +277,7 @@ def drain(
             if deadline is not None and datetime.now(UTC) >= deadline:
                 break
 
-            batch = claim_batch(session, worker_id, batch_size)
+            batch = claim_batch(session, worker_id, batch_size, excluded_kinds=excluded_kinds)
             if not batch:
                 break
 
@@ -274,6 +303,7 @@ def drain(
                 _process_one(session, job, worker_id, result)
 
         result.remaining = _count_remaining(session)
+        result.deferred = _count_deferred(session, excluded_kinds)
         return result
     finally:
         session.close()

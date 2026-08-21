@@ -2407,6 +2407,8 @@ export interface components {
             dead: number;
             /** Oldest Pending Age S */
             oldest_pending_age_s: number | null;
+            /** Deferred */
+            deferred: number;
         };
         /**
          * QuoteAcceptResponse
@@ -2797,6 +2799,8 @@ export interface components {
             failed: number;
             /** Remaining */
             remaining: number;
+            /** Deferred */
+            deferred: number;
         };
         /** TokenResponse */
         TokenResponse: {

@@ -38,14 +38,27 @@ class ExifData:
 
 
 def _decode_str(value: Any) -> str | None:
+    """Décodage tolérant — **jamais** d'octet NUL en sortie.
+
+    PostgreSQL ne peut stocker aucun `\\x00` dans un `text`/`json`/`jsonb` (limitation
+    native du type, pas une négociation) : `"...".strip("\\x00")` ne retirait que les NUL
+    en tête/queue, jamais ceux **embarqués** au milieu d'une chaîne — exactement ce que
+    contiennent couramment les blobs binaires exotiques (`MakerNote`, tag EXIF `37500`)
+    sur du matériel réel. Jamais reproduit avec les fixtures EXIF fabriquées en test
+    (`tests/support/images.py`, EXIF minimal et propre) — découvert seulement en sourçant
+    de vraies photos (§ `.agent-team/implementation.md`, Backend). `.replace()` plutôt que
+    `.strip()` : retire les NUL où qu'ils soient dans la chaîne.
+    """
     if value is None:
         return None
     if isinstance(value, bytes):
         try:
-            return value.decode("utf-8", errors="replace").strip("\x00").strip() or None
+            decoded = value.decode("utf-8", errors="replace")
         except Exception:  # noqa: BLE001 — extraction tolérante, jamais d'exception remontée
             return None
-    text = str(value).strip()
+    else:
+        decoded = str(value)
+    text = decoded.replace("\x00", "").strip()
     return text or None
 
 

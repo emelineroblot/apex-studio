@@ -8,6 +8,7 @@ verrou logique pendant tout le traitement (§3-E.2, Option 2 retenue).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -29,6 +30,28 @@ _CLAIM_SQL = text(
     WITH claimed AS (
         SELECT id FROM job
          WHERE status = 'pending' AND run_at <= now()
+         ORDER BY priority, run_at, id
+         FOR UPDATE SKIP LOCKED
+         LIMIT :batch_size
+    )
+    UPDATE job j
+       SET status = 'running', attempts = j.attempts + 1, locked_by = :worker_id,
+           locked_at = now(), heartbeat_at = now(), updated_at = now()
+      FROM claimed c
+     WHERE j.id = c.id
+    RETURNING j.id
+    """
+)
+
+# Même réclamation, mais aveugle aux types de jobs que ce pilote ne sait pas exécuter
+# (`registry.unservable_kinds`, `capabilities`). `SKIP LOCKED` saute les lignes verrouillées,
+# ce filtre saute les lignes *inexécutables ici* : dans les deux cas le job reste `pending`,
+# intact, disponible pour un autre worker — jamais réclamé pour être aussitôt échoué.
+_CLAIM_SQL_EXCLUDING_KINDS = text(
+    """
+    WITH claimed AS (
+        SELECT id FROM job
+         WHERE status = 'pending' AND run_at <= now() AND kind <> ALL(:excluded_kinds)
          ORDER BY priority, run_at, id
          FOR UPDATE SKIP LOCKED
          LIMIT :batch_size
@@ -115,10 +138,26 @@ def heartbeat(job_id: int, worker_id: str) -> bool:
         return bool(outcome.rowcount)
 
 
-def claim_batch(session: Session, worker_id: str, batch_size: int) -> list[Job]:
-    """Réclame jusqu'à `batch_size` jobs `pending` dus, atomiquement. Committe aussitôt."""
-    params = {"worker_id": worker_id, "batch_size": batch_size}
-    ids = [row[0] for row in session.execute(_CLAIM_SQL, params)]
+def claim_batch(
+    session: Session,
+    worker_id: str,
+    batch_size: int,
+    *,
+    excluded_kinds: Sequence[str] = (),
+) -> list[Job]:
+    """Réclame jusqu'à `batch_size` jobs `pending` dus, atomiquement. Committe aussitôt.
+
+    `excluded_kinds` : types de jobs que ce pilote ne sait pas exécuter — ils ne sont pas
+    réclamés du tout (voir `_CLAIM_SQL_EXCLUDING_KINDS`). Vide par défaut : un worker
+    complet réclame tout.
+    """
+    params: dict[str, object] = {"worker_id": worker_id, "batch_size": batch_size}
+    if excluded_kinds:
+        params["excluded_kinds"] = list(excluded_kinds)
+        statement = _CLAIM_SQL_EXCLUDING_KINDS
+    else:
+        statement = _CLAIM_SQL
+    ids = [row[0] for row in session.execute(statement, params)]
     session.commit()
     if not ids:
         return []

@@ -53,6 +53,12 @@ yarn-error.log*
 /media/
 /uploads/
 /demo-photos/
+# `settings.real_photos_dir` ("./demo-photos") est un chemin résolu contre le CWD du
+# process — `uv run python -m apex.cli seed --reset` s'exécute depuis `services/api`
+# (AGENTS.md, § Commandes), donc le dossier réellement peuplé est
+# `services/api/demo-photos/`, distinct de `/demo-photos/` à la racine. Motif ancré
+# explicite pour les deux, même logique que ci-dessus (pas de `demo-photos/` nu).
+/services/api/demo-photos/
 *.sqlite3
 
 # --- OS & éditeurs ---

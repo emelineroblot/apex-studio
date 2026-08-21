@@ -89,6 +89,89 @@ projet de la même stack vivent dans la skill globale `stack-pitfalls`, pas ici.
   `apex/demo/seed.py::_RESET_TABLES` (ajout de `circuit`) ; à vérifier une nouvelle fois si une
   future table de référence rejoint le catalogue du jeu de démo. *(2026-08-21)*
 
+- **`requires-python = ">=3.13"` était présent depuis le tout premier commit alors que le plan
+  avait décidé Python 3.12 (§3-B)** — deux jalons et plusieurs revues n'ont rien vu, parce que
+  rien n'installait jamais le projet comme le ferait la production. `rapidocr-onnxruntime`
+  (moteur OCR) n'a **jamais** publié de version compatible Python 3.13 (vérifié sur toutes ses
+  versions via l'API PyPI) ; `uv sync` en local l'installe quand même sur Python 3.13.5, sans
+  avertissement, alors que `pip` (utilisé par le builder Vercel) refuse purement et simplement
+  de le résoudre. → `uv run`/`uv sync` valident un environnement de **développement**, jamais
+  une installation de **production** ; `bash scripts/check_prod_install.sh` (nouveau, conteneur
+  Linux jetable, `pip` réel) est désormais le seul test qui fait foi avant un déploiement. Voir
+  `docs/wiki/architecture.md`, « Version Python figée à 3.12 ». *(2026-08-21)*
+
+- **Toute édition simultanée de `pyproject.toml`/`requires-python` (borne haute) ou de
+  `.python-version` alors qu'un `.venv` partagé est actif force sa reconstruction au **prochain**
+  `uv run`/`uv sync` — y compris ceux lancés par un autre agent, silencieusement.** Reproduit en
+  conditions réelles (bac à sable) : `uv run python --version` supprime et recrée `.venv` dès que
+  la version épinglée (`.python-version`) ou que la borne haute de `requires-python` exclut
+  l'interpréteur actif — même sans qu'aucun `uv sync` explicite n'ait été lancé. À l'inverse,
+  **élargir uniquement le plancher** (`>=3.12` sans borne haute, l'interpréteur actif restant
+  valide) ne touche pas au `.venv` : c'est la seule forme de changement de version sûre à côté
+  d'un agent qui travaille en parallèle. `uv lock`/`uv export`, eux, n'écrivent que le lockfile
+  et ne touchent jamais `.venv`, quel que soit l'écart avec `pyproject.toml` — d'où la stratégie
+  retenue : préparer/valider la version resserrée dans une copie isolée, ne l'appliquer au dépôt
+  réel qu'une fois le `.venv` partagé libre. *(2026-08-21)*
+
+- **`requirements.txt` généré par `uv export --no-dev --format requirements-txt` casse
+  l'installation `pip` de deux façons indépendantes**, sans lien avec la question du poids :
+  (1) sans `--no-emit-project`, la ligne `-e .` du paquet local n'a pas de hachage, ce qui casse
+  le mode empreintes de `pip` dès qu'une autre ligne (n'importe laquelle) porte un hachage — le
+  paquet local doit être exclu de l'export et installé à part (`pip install --no-deps -e .`).
+  (2) Le message de statut `uv` (`Resolved N packages…`) part normalement sur stderr avec une
+  redirection `>` correcte — mais un fichier historique du dépôt le portait quand même en ligne
+  1, rendant `pip install -r requirements.txt` invalide dès le départ (`Invalid requirement`).
+  Toujours vérifier la première ligne du fichier généré. *(2026-08-21)*
+
+- **`opencv-python-headless` ne réduit le poids que d'environ 35 Mo sur ce projet, pas des
+  « 185 Mo » qu'on pourrait attendre d'après le poids d'`opencv_python.libs` seul** — le module
+  compilé `cv2` lui-même (~72 Mo) est quasi identique entre les deux variantes ; seule la
+  bibliothèque `.libs` (GTK/Qt) rétrécit (116 Mo → 81 Mo). Ne pas construire un budget de poids
+  sur cette seule substitution sans avoir mesuré. Substitution non triviale à effectuer via
+  `uv`/`pip` : `[tool.uv.override-dependencies]` ne fait que réviser une contrainte de version
+  pour un paquet déjà nommé dans le graphe, **jamais** remplacer un nom de paquet par un autre
+  (testé, confirmé sans effet sur la résolution) — la seule méthode fiable est
+  `pip uninstall opencv-python` puis `pip install --no-deps opencv-python-headless==<même
+  version exacte>`, jamais une simple installation par-dessus (laisserait les bibliothèques GUI
+  orphelines sur le disque). *(2026-08-21)*
+
+- **`tests/conftest.py` porte un fixture `session, autouse=True` qui recrée le schéma Postgres
+  et fait tourner Alembic pour n'importe quel test collecté** — y compris `tests/ocr/test_eval.py`,
+  dont la docstring promet pourtant « aucune base de données ». La promesse porte sur la
+  *logique* du test, pas sur la collecte pytest globale. Pour rejouer ce test isolément (hors du
+  `docker compose` du dépôt, sans risquer d'interbloquer un `pytest` déjà en cours ailleurs — voir
+  plus haut « ne jamais lancer deux pytest concurrents »), démarrer un Postgres jetable
+  **séparé** qui écoute directement sur le port `55433` (`postgres:18-alpine … -p 55433`) et
+  partager son *network namespace* avec le conteneur de test (`docker run --network
+  container:<db>`) plutôt que de publier un port hôte — `TEST_DATABASE_URL` est une chaîne
+  **littérale** (`localhost:55433`) dans `conftest.py`, pas dérivée de `DATABASE_URL`. *(2026-08-21)*
+
+- **`tests/pipeline/test_quarantine_and_listing.py::test_default_list_shows_only_one_item_per_burst_series`
+  construit son horodatage EXIF avec `.astimezone().replace(tzinfo=None)` — fuseau de la
+  machine, pas `Europe/Paris`** — reproduction du piège déjà documenté ci-dessus pour
+  `test_ingest_e2e.py`, mais dans un fichier qui n'a pas reçu le même correctif. Passe par
+  coïncidence sur une machine réglée sur `Europe/Paris` (le cas probable du poste de
+  développement d'origine), échoue de façon **reproductible** (pas flaky) dans tout conteneur en
+  UTC — donc dans à peu près n'importe quel CI ou environnement de vérification indépendant.
+  Constaté en vérifiant l'installation de production dans un conteneur Linux, sans lien avec
+  cette vérification elle-même. **Corrigé le 2026-08-21** (`astimezone(PARIS)`, constante
+  `PARIS = ZoneInfo("Europe/Paris")` en tête de fichier, comme `test_ingest_e2e.py`) et vérifié
+  dans les deux sens : `TZ=UTC0 uv run pytest …` échoue sans le correctif, passe avec.
+  **`TZ=UTC0` fonctionne sur Windows** (le CRT le lit au démarrage du processus) alors que
+  `time.tzset()` n'y existe pas : rejouer un test suspect de dépendre du fuseau ne demande donc
+  aucun conteneur. *(2026-08-21)*
+
+- **Sous `set -euo pipefail`, une affectation `VAR=$(cmd | awk …)` dont `cmd` échoue tue le
+  script entier, silencieusement si `cmd` est muselée par `2>/dev/null`.** Vécu sur
+  `scripts/check_prod_install.sh` : le `pip show opencv-python` de la substitution headless
+  réussissait tant que le moteur OCR était une dépendance principale ; le jour où il est passé
+  en extra optionnel — c'est-à-dire le jour même où le script devenait le garde-fou obligatoire
+  avant déploiement — la même ligne s'est mise à échouer et le script s'arrêtait juste après
+  avoir affiché « [2/4] », sans un mot, code de sortie 1. Diagnostiqué comme une panne
+  d'installation pendant plusieurs minutes. → `|| true` sur toute substitution dont l'échec est
+  un cas nominal ; et surtout : **un garde-fou doit être rejoué après le changement qu'il est
+  censé garder**, il fait partie du périmètre de ce changement, pas de son décor. *(2026-08-21)*
+
 - **`require_owner` ne protège aucune route destructrice de ce projet, tant que
   `GET /demo/accounts` est public** — l'endpoint de self-service de la démo renvoie les
   identifiants en clair, par conception. Le cloisonnement de `POST /demo/seed?reset=true`

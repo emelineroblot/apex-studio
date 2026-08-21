@@ -8,6 +8,10 @@ class QueueStats(BaseModel):
     running: int
     dead: int
     oldest_pending_age_s: float | None
+    #: Parmi `pending` : jobs que *cet* environnement ne sait pas exécuter et laisse à un
+    #: worker plus capable (typiquement `ocr_media` vu depuis la fonction Vercel, qui
+    #: n'embarque pas le moteur OCR). Sous-ensemble de `pending`, jamais un total à part.
+    deferred: int
 
 
 class TickResponse(BaseModel):
@@ -15,3 +19,5 @@ class TickResponse(BaseModel):
     done: int
     failed: int
     remaining: int
+    #: Voir `QueueStats.deferred` — ce que ce tick a délibérément laissé en file.
+    deferred: int

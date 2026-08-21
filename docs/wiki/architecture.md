@@ -521,3 +521,155 @@ exception. La forme de test qui a fermé le sujet est un **test d'accord entre c
 le jeu de démo, `/search?status=inconsistent` renvoie 22 et non 95 — les 73 manquants sont des
 membres non représentatifs d'une **vraie** rafale, légitimement repliés, comme `/media` les
 replie déjà.
+
+## Version Python figée à 3.12 et validation d'installation de production
+*Décidé le 2026-08-21 — run `préparation déploiement`*
+
+**Décision.** `pyproject.toml` fixe `requires-python = ">=3.12,<3.13"` — jamais 3.13, malgré
+Vercel qui supporte les deux (3.12 par défaut, 3.13 et 3.14 disponibles). `bash
+scripts/check_prod_install.sh` (conteneur Linux jetable, `pip` réel, mode empreintes) devient
+un passage obligé avant tout déploiement : il installe `requirements.txt` exactement comme le
+ferait le builder Vercel, substitue `opencv-python-headless` à `opencv-python`, vérifie que
+l'application importe, et mesure le poids décompressé contre le plafond de 250 Mo.
+
+**Pourquoi.** Deux jalons complets (J1, J2), plusieurs revues et une passe d'intégration se
+sont succédé sans que rien ne révèle que **le projet ne s'installe pas en production** —
+personne n'avait jamais tenté une installation de production. `requires-python = ">=3.13"`
+était présent dès le premier commit (`feat(socle)`), alors que le plan avait décidé Python 3.12
+(§3-B) ; `rapidocr-onnxruntime` (moteur OCR, Décision J), choisi *précisément* parce qu'il tient
+dans le budget Vercel, n'a **publié aucune version compatible Python 3.13** sur PyPI, de la
+première à la dernière (1.4.4, vérifié par requête directe à l'API PyPI). `uv sync` en local
+installe pourtant `rapidocr-onnxruntime==1.4.4` sur Python 3.13.5 sans se plaindre — `uv` ne
+rejette pas cette combinaison aussi strictement que `pip`, qui refuse purement et simplement de
+résoudre le paquet (`Could not find a version that satisfies the requirement`). Le poste de
+dev « fonctionnait » ; seule une tentative d'installation par `pip`, dans un environnement
+Linux réel, révèle le problème — c'est exactement ce que fait le builder Vercel, et exactement
+ce que rien ne testait jusqu'ici.
+
+Deux artefacts supplémentaires de `requirements.txt` (généré par `uv export --no-dev
+--format requirements-txt`) auraient de toute façon fait échouer l'installation même sur
+Python 3.12 : une ligne `-e .` sans hachage, qui casse le mode empreintes de `pip` dès qu'une
+autre ligne porte un hachage (systématique dès que `uv export` inclut le paquet local) — corrigé
+par `--no-emit-project` et une installation séparée (`pip install --no-deps -e .`) ; et une
+première ligne parasite (`Resolved N packages…`, un message de statut `uv` capturé par erreur)
+qui rend le fichier invalide pour `pip` dès la première ligne.
+
+**Conséquences.** `uv sync`/`uv run` valident un environnement de **développement**, jamais une
+installation de **production** — les deux ont divergé une fois déjà et rien n'empêche que cela
+se reproduise sur un autre paquet. `check_prod_install.sh` est le garde-fou : toute dérive
+future (borne `requires-python` remontée sans vérification, nouvelle dépendance sans wheel pour
+la version cible, `requirements.txt` mal régénéré) échoue à l'exécution du script, avant un
+déploiement, plutôt qu'au premier déploiement réel. `api/index.py` ajoute par ailleurs `src/` à
+`sys.path` en défense en profondeur : l'import de `apex` ne dépend plus uniquement de la
+réussite de l'installation éditable séparée (`pip install --no-deps -e .`), dont on ne peut pas
+vérifier depuis ici si le builder Vercel l'exécute réellement telle quelle.
+
+## Poids d'une fonction Vercel Python : 250 Mo, mesurés, pas supposés
+*Décidé le 2026-08-21 — run `préparation déploiement`*
+
+**Décision.** `opencv-python` (tiré transitivement par `rapidocr-onnxruntime`) est remplacé par
+`opencv-python-headless`, **même version exacte**, appliqué par `check_prod_install.sh`
+(`pip uninstall` puis `pip install --no-deps`, jamais une simple installation par-dessus, pour
+ne laisser aucun fichier orphelin de la variante GUI). L'évaluation offline
+(`pytest -m ocr_eval`) a été rejouée après substitution : **56,9 % d'automatique, 98,0 % de
+précision, chiffres strictement identiques** — aucun changement de comportement du moteur.
+`python-jose[cryptography]` → `python-jose` et `uvicorn[standard]` → `uvicorn` sont préparés
+(le JWT du projet est HS256 exclusivement, qui ne requiert aucun backend asymétrique ; le
+serveur ASGI n'est jamais importé par le code applicatif, seulement invoqué en local — Vercel
+invoque directement l'objet `app`), mais **pas encore appliqués** au dépôt réel : ces deux
+changements modifient `pyproject.toml`/`uv.lock`, ce qu'on ne peut pas faire sans resynchroniser
+le `.venv` partagé (voir `docs/wiki/pieges-projet.md`).
+
+**Pourquoi.** Mesuré (`services/api/requirements.txt` réel, installé par `pip` dans
+`python:3.12-slim`, Linux) : **581 Mo** décompressés avec `opencv-python`, **546 Mo** après
+substitution headless — un gain réel mais modeste (35 Mo ; l'essentiel du poids d'OpenCV n'est
+pas dans les bibliothèques GUI mais dans le module `cv2` compilé lui-même, partagé par les deux
+variantes). Sans le moteur OCR du tout, l'API tombe à **292 Mo**, et à **251 Mo** (238 Mo hors
+`pip`, un outil de build qui ne fait probablement pas partie du paquet livré) une fois les deux
+substitutions `jose`/`uvicorn` ajoutées — **sous le plafond**, marge d'environ 12 Mo. Mais le
+worker qui draine la file de jobs (`apex/queue/runner.py::drain`) traite **tous** les types de
+jobs par le même code générique — `ingest_media`, `finalize_batch`, `ocr_media`,
+`build_delivery`, `demo_reset` — donc a besoin de `botocore` (dépôt S3), `faker` (jeu de démo)
+**et** du moteur OCR simultanément : sa version « tout compris », même avec toutes les
+substitutions sûres, pèse **509 Mo**, très au-delà du plafond, quelles que soient les
+réductions de dépendances raisonnables tentées (`onnxruntime` 66 Mo + `cv2`/`opencv-python-
+headless.libs` 153 Mo + `numpy`/`numpy.libs` 71 Mo à eux seuls dépassent le budget entier).
+**Réduire les dépendances ne suffit pas** : le moteur OCR, à lui seul, coûte plus que le budget
+complet d'une fonction.
+
+**Conséquences.** Le risque R4 du plan (§ tableau des risques, « Repli : OCR exécuté uniquement
+par le worker local, l'OCR en ligne étant alors servi par les données seedées ») n'est plus une
+hypothèse — la mesure le rend nécessaire, pas seulement possible, **si l'API principale et le
+drainage de la file restent une seule fonction Vercel**. Deux directions restent ouvertes, ni
+l'une ni l'autre implémentée à ce stade — décision à prendre explicitement, jamais en silence
+(même principe que R1) :
+1. **Isoler `ocr_media` dans un déploiement dédié** — **mesurée, écartée par les chiffres**, pas
+   par supposition. Jeu de dépendances minimal d'une fonction dédiée (inférence + lecture/
+   écriture en base + lecture du fichier sur le stockage objet, sans `faker`, sans
+   FastAPI/`uvicorn`, sans `alembic`, sans `jose`/`bcrypt`, sans `typer`/`rich` — composé à
+   partir des imports réels de `apex/queue/handlers/ocr_media.py` et de sa fermeture) : **437 Mo
+   hors `pip`**, mesuré dans les mêmes conditions (conteneur Linux, Python 3.12, `pip` réel,
+   `opencv-python-headless`). Dépassement de **187 Mo (+75 %)**, porté quasi entièrement par le
+   moteur d'inférence lui-même (`onnxruntime` 66 Mo + `cv2`/`opencv-python-headless.libs` 153 Mo
+   + `numpy`/`numpy.libs` 71 Mo + `shapely`/`pyclipper` 16 Mo ≈ 322 Mo à eux seuls, avant même la
+   base de données ou le stockage objet). Aucune réduction raisonnable ne comble cet écart : ce
+   n'est pas une question de dépendances annexes, c'est le moteur qui ne tient pas, seul, dans
+   une fonction Vercel. **Option écartée.**
+2. **OCR uniquement par le worker local/CLI** (`apex.cli worker --loop`), jamais par
+   `POST /jobs/tick` en ligne — la démonstration en ligne s'appuie sur le jeu déjà seedé
+   (rattachements OCR déjà calculés, visibles, cliquables). Coût démo : une nouvelle photo
+   uploadée **via le site en ligne** n'obtient pas de rattachement automatique immédiat (elle
+   part en validation manuelle comme n'importe quel cas `review`/`abstain` — rien ne casse,
+   mais rien ne « wow » en direct sur un upload fait pendant l'appel). Coût d'ingénierie :
+   faible, aligné sur le repli déjà anticipé par le plan (R4). **Seule option qui reste viable
+   dans la stack actuelle** — retenue par élimination mesurée, pas par défaut.
+   **Implémentée le 2026-08-21**, voir la décision suivante.
+
+**Mesure finale après implémentation** (`bash scripts/check_prod_install.sh`, conteneur
+Linux, `pip` réel) : **214,8 Mo hors `pip`**, soit ~35 Mo de marge sous le plafond — meilleur
+que les 238 Mo estimés plus haut, l'estimation partant d'un jeu de dépendances reconstitué à
+la main quand la mesure part du `requirements.txt` réellement exporté. Le poids restant est
+dominé par `numpy` (43 Mo + 28 Mo de `numpy.libs`, requis par le hash perceptuel), `botocore`
+(30 Mo) et `faker` (25 Mo, jeu de démo) — trois pistes de réduction si la marge devait un jour
+se resserrer, aucune nécessaire aujourd'hui.
+
+## Séparation des pilotes par capacité d'exécution, détectée et non configurée
+*Décidé le 2026-08-21 — run `préparation déploiement`*
+
+**Décision.** Chaque handler déclare ce qu'il exige (`@handler("ocr_media", requires=(OCR_ENGINE,))`),
+chaque processus détecte ce qu'il a (`queue/capabilities.py`, par `importlib.util.find_spec`),
+et `drain()` exclut de la **réclamation** les types de jobs que ce processus ne peut pas
+exécuter (`registry.unservable_kinds` → `claim.claim_batch(excluded_kinds=...)`). Ces jobs
+restent `pending`, intacts, comptés dans un nouveau champ `deferred` exposé au contrat
+(`TickResponse`, `QueueStats`). Le pilote CLI, lui, ne configure rien : sur un poste où l'extra
+`ocr` est installé, il réclame tout.
+
+**Pourquoi.** L'alternative — laisser la fonction Vercel réclamer un `ocr_media` qu'elle ne peut
+pas exécuter — produit trois échecs puis un job `dead` : le média perd son rattachement
+automatique et atterrit en validation manuelle, sans que rien n'indique que la cause est un
+paquet absent plutôt qu'une photo illisible. L'invariant « le pipeline ne perd jamais un
+fichier, jamais de rejet silencieux » s'applique à la file autant qu'à l'ingestion.
+
+**Détecté, jamais configuré**, et c'est le cœur de la décision : une variable d'environnement
+(`WORKER_SKIP_KINDS=ocr_media`) aurait marché tant que personne ne l'oublie au déploiement — or
+ce projet a **déjà** payé le prix d'un garde-fou neutralisé par un défaut mal choisi (§
+« Authentification, cloisonnement et garde-fou de secrets », où un premier correctif avait fait
+de `local` le défaut d'`APP_ENV`, rendant le contrôle inopérant précisément dans le cas visé).
+Ici, l'installation *est* la configuration : un environnement sans le moteur ne peut pas se
+tromper sur ce qu'il sait faire.
+
+**Une exclusion, jamais une liste blanche.** Le filtre porte sur les `kind` *enregistrés et non
+servables*, pas sur les `kind` servables. Un `kind` inconnu du registre reste réclamable et
+échoue explicitement (§3-E.3) ; une liste blanche l'aurait rendu invisible et l'aurait laissé
+dormir en file — le silence exact que la règle interdit. Un test le verrouille
+(`tests/queue/test_capability_filtering.py`), de même que le fait qu'un job différé **en tête de
+file** ne consomme pas le lot (`LIMIT` s'applique après le filtre, sinon un `ocr_media`
+prioritaire gèlerait toute la file en ligne).
+
+**Conséquences.** `reclassify_ocr` reste exécutable en ligne — re-projeter des seuils rejoue des
+candidats déjà stockés sans jamais ré-inférer (§ « Calibration des seuils ») : changer un seuil
+depuis la démo en ligne fonctionne, seule la première lecture d'une photo neuve attend un worker.
+Ajouter un jour un job qui exige une dépendance lourde ne demande qu'une entrée dans
+`_CAPABILITY_MODULES` et un `requires=` sur son handler. Enfin, le worker CLI **avertit** au
+démarrage si une capacité manque (`⚠ moteur OCR absent…`) : côté serverless l'exclusion est
+voulue, sur un poste c'est presque toujours une erreur d'installation.
