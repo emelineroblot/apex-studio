@@ -16,6 +16,8 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/search", label: "Recherche", roles: ["owner", "photographer"] },
   { href: "/review", label: "File de validation", roles: ["owner", "photographer"] },
   { href: "/collections", label: "Collections", roles: ["owner", "photographer"] },
+  { href: "/quotes", label: "Devis", roles: ["owner"] },
+  { href: "/invoices", label: "Factures", roles: ["owner"] },
   { href: "/clients", label: "Clients", roles: ["owner", "photographer"] },
   { href: "/circuits", label: "Circuits", roles: ["owner", "photographer"] },
   { href: "/drivers", label: "Pilotes", roles: ["owner", "photographer"] },
