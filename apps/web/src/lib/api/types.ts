@@ -221,3 +221,36 @@ const QUARANTINE_DETAIL_KEYS_EXHAUSTIVE = {
   width: true,
 } satisfies Record<QuarantineDetailKey, true>;
 export const QUARANTINE_DETAIL_KEYS = Object.keys(QUARANTINE_DETAIL_KEYS_EXHAUSTIVE) as QuarantineDetailKey[];
+
+// ── J3 — Espace client, livraison, facturation ────────────────────────────────────────
+export type PublicSessionResponse = Schemas["PublicSessionResponse"];
+export type PublicCollectionRef = Schemas["PublicCollectionRef"];
+export type PublicCollectionResponse = Schemas["PublicCollectionResponse"];
+export type PublicMediaItem = Schemas["PublicMediaItem"];
+export type PublicSelectionResponse = Schemas["PublicSelectionResponse"];
+export type PublicSelectionItemResponse = Schemas["PublicSelectionItemResponse"];
+export type PublicSelectionValidateResponse = Schemas["PublicSelectionValidateResponse"];
+export type PublicDeliveryStatusResponse = Schemas["PublicDeliveryStatusResponse"];
+/** `pending | building | ready | failed` — vrai enum du contrat, jamais une chaîne libre. */
+export type DeliveryReadiness = PublicDeliveryStatusResponse["status"];
+
+export type ShareLinkCreateRequest = Schemas["ShareLinkCreateRequest"];
+export type ShareLinkCreateResponse = Schemas["ShareLinkCreateResponse"];
+export type ShareLinkOut = Schemas["ShareLinkOut"];
+export type SelectionOut = Schemas["SelectionOut"];
+export type SelectionItemOut = Schemas["SelectionItemOut"];
+export type DeliveryOut = Schemas["DeliveryOut"];
+
+export type InvoiceOut = Schemas["InvoiceOut"];
+export type InvoiceLineOut = Schemas["InvoiceLineOut"];
+export type InvoiceLineIn = Schemas["InvoiceLineIn"];
+export type InvoicePatchRequest = Schemas["InvoicePatchRequest"];
+export type InvoiceStatus = InvoiceOut["status"];
+
+export type QuoteOut = Schemas["QuoteOut"];
+export type QuoteCreateRequest = Schemas["QuoteCreateRequest"];
+export type QuoteAcceptResponse = Schemas["QuoteAcceptResponse"];
+export type QuoteStatus = QuoteOut["status"];
+
+export type DashboardOut = Schemas["DashboardOut"];
+export type MediaIngestedVolume = Schemas["MediaIngestedVolume"];

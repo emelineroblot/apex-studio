@@ -623,10 +623,21 @@ def _plan_shooting_media(
                 "mime": "image/jpeg",
                 "width": 6000,
                 "height": 4000,
-                # Pas de HD pour un média simulé (§3-N.1 : un seul pool ~40 vignettes,
-                # jamais de fichier « grand format ») — `GET /media/{id}/file/hd` répond
-                # `404 variant_not_ready`, comportement déjà géré par `routers/media.py`.
-                "storage_key_hd": None,
+                # Les trois variantes pointent le **même** fichier du pool (~40 vignettes,
+                # §3-N.1) : un jeu simulé n'a pas de vrai grand format, et en générer 8 000
+                # coûterait des gigaoctets pour un environnement jetable.
+                #
+                # `storage_key_hd` était `None` jusqu'à J3. La livraison a montré ce que
+                # cela impliquait : `build_delivery` refuse — à raison — de construire une
+                # archive incomplète, donc **aucune collection du jeu de démo n'était
+                # livrable**, et la fonctionnalité la plus démonstrative du jalon restait
+                # invisible. Trouvé en jouant le parcours complet contre l'API réelle, pas
+                # en test : chaque test fabriquait ses propres médias, avec un HD.
+                #
+                # Le fichier livré est donc une vignette, pas un cliché pleine résolution.
+                # C'est le même compromis que partout dans ce générateur — des données
+                # crédibles dans leur forme, jamais dans leur poids.
+                "storage_key_hd": thumb_key,
                 "storage_key_preview": thumb_key,
                 "storage_key_thumb": thumb_key,
                 "shot_at_exif": shot_at.replace(tzinfo=None),

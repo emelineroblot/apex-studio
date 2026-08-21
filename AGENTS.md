@@ -46,6 +46,11 @@ Le cadrage complet est dans `contexte/brief-app-b-studio-photo.md` (non versionn
   le job `pending` (compté dans `deferred`) pour un pilote capable ; il ne le réclame jamais
   pour l'échouer. En clair : en ligne tout le pipeline tourne sauf la lecture des numéros,
   que `uv run python -m apex.cli worker --loop` traite depuis un poste, par le réseau.
+- **Un test ne remplace pas le parcours réel.** Les tests fabriquent leurs propres données ;
+  la démonstration tourne sur le jeu généré. Trois écarts majeurs de ce projet n'ont été vus
+  qu'en confrontant le code au réel — dont une démonstration où rien n'était livrable, avec
+  303 tests verts. `python scripts/verify_j3_flow.py` rejoue le parcours complet : à passer
+  à chaque jalon, avant de conclure.
 - **Le HD n'est jamais servi avant validation.** Aperçus filigranés côté client, accès au stockage
   objet toujours médié par le backend.
 
@@ -91,6 +96,7 @@ uv run pytest -m ocr_eval -s                # gate bloquant, ~5 min, voir tests/
 uv run ruff check . && uv run ruff format --check . && uv run mypy src
 uv export --no-dev --format requirements-txt --no-emit-project > requirements.txt
 bash scripts/check_prod_install.sh          # garde-fou obligatoire avant tout déploiement
+python scripts/verify_j3_flow.py            # parcours de bout en bout, API lancée + base seedée
                                             # (installe par pip en Linux réel, refuse le moteur
                                             # OCR dans requirements.txt, mesure le poids)
 ```
@@ -159,3 +165,5 @@ variables et limites connues : **`docs/deploiement.md`**.
 | J1 | `feature/socle-ingestion` | Modèle de données, auth, client / shooting / engagements, upload, EXIF, doublons, intégrité |
 | J2 | `feature/ocr-recherche` | OCR, seuils, file de validation, recherche à facettes, collections |
 | J3 | `feature/espace-client` | Espace client, sélection, livraison HD, devis, facture, dashboard |
+
+Les trois jalons sont livrés. Le contrat n'a plus aucune route en `501`.

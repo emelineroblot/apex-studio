@@ -16,6 +16,8 @@ client (J3, TTL 30 min) — seule la portée interne est câblée en J1.
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -28,11 +30,14 @@ from sqlalchemy.orm import Session
 
 from apex.config import settings
 from apex.db import get_db
+from apex.models.billing import ShareLink
 from apex.models.user import AppUser
 from apex.routers._common import bearer_scheme
+from apex.services import sharing
 
 JWT_ALGORITHM = "HS256"
 INTERNAL_TOKEN_SCOPE = "internal"
+CLIENT_TOKEN_SCOPE = "client"
 
 BCRYPT_MAX_BYTES = 72
 
@@ -146,3 +151,104 @@ def require_role(*roles: str) -> Any:
         return user
 
     return Depends(_dependency)
+
+
+# --- Portée client : session courte de l'espace de partage (§3-L.2) --------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ClientScope:
+    """Périmètre d'une session client — **la seule source d'autorité** du routeur `/public`.
+
+    Aucun endpoint public n'accepte d'identifiant de collection ou de client : ils viennent
+    d'ici, donc du jeton, jamais de la requête (§3-L.3).
+    """
+
+    share_link_id: uuid.UUID
+    collection_id: int
+    client_id: int
+
+
+def create_client_session_token(link: ShareLink, client_id: int) -> tuple[str, int]:
+    """JWT de 30 min échangé contre le jeton long (§3-L.2).
+
+    Le jeton long ne doit pas circuler à chaque requête : il apparaîtrait dans le `src` de
+    chaque vignette, donc dans les journaux du navigateur, du proxy et de l'hébergeur.
+    """
+    ttl = timedelta(minutes=settings.client_session_ttl_minutes)
+    payload: dict[str, Any] = {
+        "sub": str(link.id),
+        "scope": CLIENT_TOKEN_SCOPE,
+        "collection_id": link.collection_id,
+        "client_id": client_id,
+        "exp": datetime.now(UTC) + ttl,
+        "iat": datetime.now(UTC),
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=JWT_ALGORITHM), int(
+        ttl.total_seconds()
+    )
+
+
+def get_client_scope(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer_scheme)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClientScope:
+    """Dépendance **unique** du routeur `/public`.
+
+    Revalide le lien de partage en base à chaque requête, et pas seulement à l'ouverture de
+    session : sans cela, un lien révoqué resterait exploitable jusqu'à l'expiration du JWT,
+    soit une demi-heure — alors que « révocation immédiate » est un critère d'acceptation.
+    """
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "not_authenticated",
+                "message": "Session client requise.",
+                "detail": None,
+            },
+        )
+    payload = _decode_token(credentials.credentials)
+    if payload.get("scope") != CLIENT_TOKEN_SCOPE:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "invalid_token",
+                "message": "Portée de jeton invalide.",
+                "detail": None,
+            },
+        )
+    try:
+        link_id = uuid.UUID(str(payload["sub"]))
+        collection_id = int(payload["collection_id"])
+        client_id = int(payload["client_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "invalid_token", "message": "Jeton invalide.", "detail": None},
+        ) from exc
+
+    link = db.execute(select(ShareLink).where(ShareLink.id == link_id)).scalar_one_or_none()
+    if link is None or link.collection_id != collection_id:
+        # Le lien a disparu (collection supprimée en cascade) ou le jeton a été forgé avec
+        # une collection qui n'est pas la sienne — indiscernables, traités pareil.
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "invalid_token", "message": "Session invalide.", "detail": None},
+        )
+    try:
+        sharing.assert_usable(link)
+    except sharing.ShareLinkExpired as exc:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "link_expired",
+                "message": "Ce lien de partage n'est plus valide.",
+                "detail": None,
+            },
+        ) from exc
+
+    return ClientScope(share_link_id=link.id, collection_id=collection_id, client_id=client_id)
+
+
+CurrentClient = Annotated[ClientScope, Depends(get_client_scope)]

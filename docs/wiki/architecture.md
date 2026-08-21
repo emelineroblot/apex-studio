@@ -633,6 +633,84 @@ dominé par `numpy` (43 Mo + 28 Mo de `numpy.libs`, requis par le hash perceptue
 (30 Mo) et `faker` (25 Mo, jeu de démo) — trois pistes de réduction si la marge devait un jour
 se resserrer, aucune nécessaire aujourd'hui.
 
+## Espace client : cloisonné par construction, des deux côtés
+*Décidé le 2026-08-21 — run `J3 livraison et facturation`*
+
+**Décision.** Le lien de partage est un jeton opaque de 256 bits dont la base ne stocke que
+le `sha256`. Il s'échange contre un JWT de session de 30 minutes (`scope='client'`), et
+c'est ce jeton court qui accompagne chaque requête, y compris chaque image. Le routeur
+`/public` n'a **qu'une** dépendance d'authentification, n'accepte **aucun** identifiant de
+collection ou de client en paramètre, et répond `404` — jamais `403` — hors périmètre.
+
+**Le cloisonnement vaut aussi côté navigateur.** `lib/client/session.ts` ne partage rien
+avec `lib/auth/session.ts` : clé de stockage distincte, jeton passé explicitement à chaque
+appel, jamais `getToken()`. Le cloisonnement serveur n'aurait aucun intérêt si le frontend
+pouvait emprunter une session studio restée ouverte dans le même navigateur — et la faute
+serait invisible en revue, puisque tout continuerait de fonctionner.
+
+**Pourquoi un jeton opaque plutôt qu'un JWT dans l'URL.** Un JWT n'est pas révocable, or la
+révocation est un critère du brief. Et **la révocation est vraiment immédiate** :
+`security.get_client_scope` relit le lien en base à *chaque* requête, pas seulement à
+l'ouverture de session. Sans cette relecture, un lien révoqué resterait exploitable jusqu'à
+l'expiration du JWT, soit une demi-heure. Un `SELECT` sur clé primaire est le prix
+négligeable de cette garantie.
+
+**Conséquences.** Personne ne peut réafficher un lien, pas même le studio : l'écran de
+partage insiste donc sur la copie unique, et la liste des liens ne montre que des
+silhouettes. Le test d'isolation est **paramétré sur les routes découvertes dans
+l'OpenAPI** — toute route `/public` ajoutée plus tard est couverte sans que personne y
+pense. Enfin, un `410` reçu en cours de session mène à la page « Ce lien n'est plus
+valide », qui n'affiche aucune trace technique : c'est un critère d'acceptation, pas une
+politesse.
+
+## Filigrane : cuit à l'ingestion pour l'aperçu, appliqué au vol pour la vignette
+*Décidé le 2026-08-21 — run `J3 livraison et facturation`*
+
+**Décision.** L'aperçu porte son filigrane dans ses pixels, écrit une fois à l'ingestion.
+La vignette **stockée** reste propre et c'est la copie **servie au client** qui est
+filigranée, à la volée (`derivatives.watermark_encoded_image`).
+
+**Pourquoi cette asymétrie.** Le pHash et la netteté sont calculés sur la vignette : un
+filigrane cuit dedans introduirait une texture répétée qui fausserait la DCT basses
+fréquences et la variance de Laplacien — deux doublons légitimement identiques pourraient
+diverger, et le choix du représentant le plus net serait biaisé par la densité du filigrane
+plutôt que par le contenu. L'écart avait été signalé en revue J1 et laissé ouvert avec sa
+piste de résolution ; c'est exactement celle qui est appliquée ici.
+
+**Conséquences.** Un décodage/ré-encodage par vignette servie, compensé par un `ETag` et un
+`Cache-Control: private` — le navigateur du client ne la redemande pas. L'`ETag` porte la
+variante : sans ce suffixe, vignette et aperçu du même média partageaient une empreinte et
+le navigateur servait l'une pour l'autre (constaté). Et la police par défaut de Pillow ne
+couvrant que l'ASCII, le texte du filigrane est translittéré : « Studio Chicane — aperçu »
+s'y dessinait « Studio Chicane ▯ aper▯u ».
+
+## Le jeu de démonstration doit être livrable, pas seulement affichable
+*Décidé le 2026-08-21 — run `J3 livraison et facturation`*
+
+**Décision.** Les trois variantes d'un média simulé pointent le même fichier du pool. Le
+générateur posait auparavant `storage_key_hd = None`, par une décision d'origine
+raisonnable (§3-N.1 : quarante vignettes partagées, jamais de fichier grand format, pour ne
+pas gonfler un environnement jetable).
+
+**Pourquoi.** En J3, `build_delivery` refuse — à raison — de construire une archive
+incomplète : livrer sans le dire serait le rejet silencieux que ce projet s'interdit.
+Conséquence non anticipée : **aucune collection du jeu de démonstration n'était livrable**,
+et la fonctionnalité la plus démonstrative du jalon restait invisible pendant une
+démonstration.
+
+**Comment ça a été trouvé, et pourquoi ça compte.** En jouant le parcours complet contre
+l'API réelle (`scripts/verify_j3_flow.py`), jamais en test : chaque test fabrique ses
+propres médias, avec un fichier haute définition. C'est le troisième écart de ce projet que
+seule la confrontation aux données réelles révèle, après `requires-python = ">=3.13"` et
+l'installation de production. Le motif est constant — **un environnement de test bien isolé
+teste ce qu'il fabrique, pas ce qui existe.**
+
+**Conséquences.** Le fichier livré en démonstration est une vignette, pas un cliché pleine
+résolution — même compromis que partout dans ce générateur : des données crédibles dans
+leur forme, jamais dans leur poids. `scripts/verify_j3_flow.py` est versionné et joue 34
+vérifications de bout en bout ; il n'a pas sa place dans `pytest` (il touche la base de
+développement et dépend d'un serveur), et c'est précisément ce qui fait sa valeur.
+
 ## Séparation des pilotes par capacité d'exécution, détectée et non configurée
 *Décidé le 2026-08-21 — run `préparation déploiement`*
 

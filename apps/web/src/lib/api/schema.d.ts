@@ -98,7 +98,21 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Réinitialisation nocturne — `owner` uniquement (J3) */
+        /**
+         * Réinitialisation nocturne — `owner` uniquement (J3)
+         * @description Bouton « remettre la démo à neuf » du dirigeant.
+         *
+         *     **Ce que `require_owner` protège ici, et ce qu'il ne protège pas.** Le mot de passe
+         *     `owner` est publié en clair par `GET /demo/accounts` (self-service assumé, §3-I) :
+         *     n'importe quel visiteur peut donc atteindre cette route. C'est acceptable pour
+         *     celle-ci, et pour elle seule — elle *restaure* l'état nominal au lieu de le détruire,
+         *     et l'environnement est jetable par conception. `POST /demo/seed?reset=true`, qui
+         *     tronque 25 tables, reste protégée par un secret serveur (revue J2, bloquant n°3) : la
+         *     différence entre les deux, c'est qu'un reset mal venu coûte quelques minutes de démo,
+         *     pas des données.
+         *
+         *     Le `dedupe_key` empêche l'empilement : cliquer dix fois ne met qu'un seul reset en file.
+         */
         post: operations["demo_reset_api_v1_demo_reset_post"];
         delete?: never;
         options?: never;
@@ -849,7 +863,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Créer une facture brouillon depuis une sélection validée */
+        /**
+         * Créer une facture brouillon depuis une sélection validée
+         * @description Même composition que le handler `refresh_draft_invoice`, déclenchée à la main.
+         *
+         *     Utile quand le studio veut la facture avant que le worker ne soit passé, ou après
+         *     avoir ajusté un tarif. Le travail réel vit dans `services/invoicing.py` : une seule
+         *     façon de composer une facture, quel que soit le point d'entrée.
+         */
         post: operations["create_invoice_from_selection_api_v1_invoices_from_selection__selection_id__post"];
         delete?: never;
         options?: never;
@@ -953,7 +974,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Accepter le devis — crée le shooting correspondant */
+        /**
+         * Accepter le devis — crée le shooting correspondant
+         * @description Accepter, c'est **créer le shooting**, dans la même transaction.
+         *
+         *     C'est tout l'intérêt métier de la route : la période et le client du devis deviennent
+         *     la fenêtre temporelle qui rattachera automatiquement les photos (§3-F.3). Un devis
+         *     accepté sans shooting obligerait à ressaisir les mêmes dates, avec le risque qu'elles
+         *     diffèrent d'une minute — et un décalage d'une minute, ici, ce sont des photos qui ne
+         *     se rattachent pas.
+         */
         post: operations["accept_quote_api_v1_quotes__quote_id__accept_post"];
         delete?: never;
         options?: never;
@@ -971,7 +1001,12 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Révoquer un lien */
+        /**
+         * Révoquer un lien
+         * @description Révocation immédiate, et vraiment immédiate : `security.get_client_scope` relit le
+         *     lien à **chaque** requête de l'espace client, donc une session déjà ouverte s'éteint
+         *     au prochain appel plutôt qu'à l'expiration de son JWT une demi-heure plus tard.
+         */
         delete: operations["revoke_share_link_api_v1_share_links__share_link_id__delete"];
         options?: never;
         head?: never;
@@ -985,7 +1020,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Suivi de livraison */
+        /**
+         * Suivi de livraison
+         * @description Vue studio de la preparation. Le champ `error` est ce qui rend une livraison
+         *     echouee actionnable : sans lui, il ne resterait qu'un statut rouge sans cause.
+         */
         get: operations["get_delivery_api_v1_deliveries__delivery_id__get"];
         put?: never;
         post?: never;
@@ -1021,7 +1060,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Déclencheur nocturne — enqueue seulement, n'exécute rien */
+        /**
+         * Déclencheur nocturne — enqueue seulement, n'exécute rien
+         * @description N'execute **rien** : met un `demo_reset` en file et repond `202`.
+         *
+         *     Contrainte de plateforme, pas choix de style : un cron Vercel Hobby dispose de 10
+         *     secondes, la ou un reset complet en demande plusieurs dizaines. Inserer une ligne
+         *     prend quelques millisecondes ; le vrai travail se fait dans le worker, avec ses 300
+         *     secondes et son heartbeat (§3-N.2, Option 2).
+         *
+         *     Le secret est compare a temps constant, comme `POST /jobs/tick` : un `!=` sur un
+         *     secret partage fuit sa longueur et son prefixe par le temps de reponse.
+         */
         post: operations["cron_nightly_api_v1_cron_nightly_post"];
         delete?: never;
         options?: never;
@@ -1072,6 +1122,23 @@ export interface paths {
         };
         /** Flux filigrané — `404` si le média est hors de la collection du jeton */
         get: operations["public_media_preview_api_v1_public_media__media_id__file_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/media/{media_id}/file/thumb": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Vignette filigranée à la volée — `404` hors de la collection du jeton */
+        get: operations["public_media_thumb_api_v1_public_media__media_id__file_thumb_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1156,7 +1223,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Flux ZIP — `403` si sélection non validée ou livraison non prête */
+        /**
+         * Flux ZIP — `403` si sélection non validée ou livraison non prête
+         * @description Le seul chemin par lequel un fichier haute definition quitte le studio.
+         *
+         *     Le controle d'acces HD (§3-H.3) est reevalue **ici**, juste avant d'ouvrir le flux, et
+         *     pas seulement au moment de la validation : selection validee **et** livraison prete.
+         */
         get: operations["get_public_delivery_archive_api_v1_public_delivery_archive_get"];
         put?: never;
         post?: never;
@@ -5116,7 +5189,7 @@ export interface operations {
     dashboard_api_v1_dashboard_get: {
         parameters: {
             query?: {
-                from_?: string | null;
+                from?: string | null;
                 to?: string | null;
             };
             header?: never;
@@ -5250,6 +5323,37 @@ export interface operations {
         };
     };
     public_media_preview_api_v1_public_media__media_id__file_preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                media_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_media_thumb_api_v1_public_media__media_id__file_thumb_get: {
         parameters: {
             query?: never;
             header?: never;

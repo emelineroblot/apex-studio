@@ -12,6 +12,7 @@ les composer ni les publier.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Security
 from sqlalchemy import select
@@ -19,13 +20,16 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from apex.db import get_db
+from apex.models.billing import ClientSelection, SelectionItem, ShareLink
 from apex.models.catalog import Client
 from apex.models.collection import Collection, CollectionItem
 from apex.models.media import Media
 from apex.models.shooting import Shooting
-from apex.routers._common import bearer_scheme, not_implemented
+from apex.routers._common import bearer_scheme
 from apex.schemas.billing import (
+    SelectionItemOut,
     SelectionOut,
+    SelectionStatus,
     ShareLinkCreateRequest,
     ShareLinkCreateResponse,
     ShareLinkOut,
@@ -40,9 +44,13 @@ from apex.schemas.collection import (
 from apex.schemas.common import Page
 from apex.schemas.search import FromSearchFilters
 from apex.security import CurrentUser
-from apex.services import access
+from apex.services import access, sharing
 from apex.services.facets import SearchFilters, collect_media_ids
 from apex.services.pagination import paginate_by_id
+
+#: Un lien de partage est temporaire par nature (§3-L). Au-delà, ce n'est plus un partage
+#: mais une publication, qui devrait passer par une autre décision produit.
+MAX_SHARE_DAYS = 90
 
 router = APIRouter(
     prefix="/collections", tags=["collections"], dependencies=[Security(bearer_scheme)]
@@ -271,9 +279,37 @@ def publish_collection(
     summary="Créer un lien de partage — le jeton en clair n'est renvoyé qu'une fois",
 )
 def create_share_link(
-    collection_id: int, payload: ShareLinkCreateRequest
+    collection_id: int,
+    payload: ShareLinkCreateRequest,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
 ) -> ShareLinkCreateResponse:
-    not_implemented("POST /collections/{id}/share-links")
+    access.require_owner(user, message="Seul le dirigeant peut partager une collection.")
+    collection = _get_collection_or_404(db, collection_id)
+    if payload.expires_in_days < 1 or payload.expires_in_days > MAX_SHARE_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_expiry",
+                "message": f"La durée doit être comprise entre 1 et {MAX_SHARE_DAYS} jours.",
+                "detail": {"max_days": MAX_SHARE_DAYS},
+            },
+        )
+    link, token = sharing.create_share_link(
+        db,
+        collection_id=collection.id,
+        created_by=user.id,
+        expires_in_days=payload.expires_in_days,
+    )
+    db.commit()
+    # Seule et unique fois où le jeton en clair quitte le serveur : il n'est pas stocké,
+    # et l'écran de partage doit le dire à l'utilisatrice avant qu'elle ferme la fenêtre.
+    return ShareLinkCreateResponse(
+        id=link.id,
+        url=sharing.build_share_url(token),
+        token=token,
+        expires_at=link.expires_at,
+    )
 
 
 @router.get(
@@ -281,8 +317,32 @@ def create_share_link(
     response_model=list[ShareLinkOut],
     summary="Liste des liens actifs — statistiques de vue",
 )
-def list_share_links(collection_id: int) -> list[ShareLinkOut]:
-    not_implemented("GET /collections/{id}/share-links")
+def list_share_links(
+    collection_id: int, user: CurrentUser, db: Session = Depends(get_db)
+) -> list[ShareLinkOut]:
+    collection = _get_collection_or_404(db, collection_id)
+    links = (
+        db.execute(
+            select(ShareLink)
+            .where(ShareLink.collection_id == collection.id)
+            .order_by(ShareLink.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        ShareLinkOut(
+            id=link.id,
+            # Le jeton n'est pas récupérable (seul son `sha256` est stocké) : cette URL est
+            # une silhouette, pas une troncature. Les liens se distinguent par leur `id`.
+            url_masked=sharing.masked_share_url(),
+            expires_at=link.expires_at,
+            revoked_at=link.revoked_at,
+            view_count=link.view_count,
+            last_seen_at=link.last_seen_at,
+        )
+        for link in links
+    ]
 
 
 @router.get(
@@ -290,5 +350,26 @@ def list_share_links(collection_id: int) -> list[ShareLinkOut]:
     response_model=SelectionOut,
     summary="Sélection client de la collection",
 )
-def get_collection_selection(collection_id: int) -> SelectionOut:
-    not_implemented("GET /collections/{id}/selection")
+def get_collection_selection(
+    collection_id: int, user: CurrentUser, db: Session = Depends(get_db)
+) -> SelectionOut:
+    collection = _get_collection_or_404(db, collection_id)
+    selection = db.execute(
+        select(ClientSelection).where(ClientSelection.collection_id == collection.id)
+    ).scalar_one_or_none()
+    if selection is None:
+        # Aucune sélection tant que le client n'a rien coché : un état vide, pas une
+        # absence de ressource — l'écran studio affiche « aucune sélection », pas une 404.
+        return SelectionOut(status="open", validated_at=None, items=[], count=0)
+
+    rows = db.execute(
+        select(SelectionItem.media_id, SelectionItem.comment)
+        .where(SelectionItem.selection_id == selection.id)
+        .order_by(SelectionItem.media_id)
+    ).all()
+    return SelectionOut(
+        status=cast(SelectionStatus, selection.status),
+        validated_at=selection.validated_at,
+        items=[SelectionItemOut(media_id=row.media_id, comment=row.comment) for row in rows],
+        count=len(rows),
+    )

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import io
+import unicodedata
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -32,8 +33,32 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
+#: Remplacements typographiques appliqués **avant** la réduction à l'ASCII : `unicodedata`
+#: décompose « ç » en « c », mais supprimerait purement et simplement un tiret cadratin.
+_TYPOGRAPHIC_FALLBACKS = {"—": "-", "–": "-", "’": "'", "«": '"', "»": '"', "…": "..."}
+
+
+def _ascii_only(text: str) -> str:
+    """Réduit le filigrane à l'ASCII imprimable.
+
+    `_load_font` retombe sur la police par défaut de Pillow dès que `DejaVuSans-Bold.ttf`
+    est introuvable — le cas sur Windows, et sur toute image Linux sans les polices
+    système, donc potentiellement en production. Cette police ne couvre que l'ASCII :
+    « Studio Chicane — aperçu » s'y dessine « Studio Chicane ▯ aper▯u ». Constaté en
+    rendant un vrai aperçu, jamais visible en test (aucun test ne regarde les pixels du
+    filigrane). Un filigrane sans accents vaut mieux qu'un filigrane à trous ; embarquer
+    une police dans le dépôt et le paquet déployé coûterait plus que le gain esthétique
+    sur une image volontairement dégradée.
+    """
+    for source, replacement in _TYPOGRAPHIC_FALLBACKS.items():
+        text = text.replace(source, replacement)
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if 32 <= ord(c) < 127).strip() or "APERCU"
+
+
 def apply_watermark(img: Image.Image, text: str) -> Image.Image:
     """Texte répété en diagonale, opacité 22 %, taille proportionnelle à la largeur (§3-H.3)."""
+    text = _ascii_only(text)
     base = img.convert("RGBA")
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -91,3 +116,20 @@ def build_watermarked_preview(img: Image.Image, watermark_text: str) -> bytes:
     preview = _resize_max_side(oriented.convert("RGB"), PREVIEW_MAX_SIDE)
     watermarked = apply_watermark(preview, watermark_text)
     return _to_webp(watermarked)
+
+
+def watermark_encoded_image(data: bytes, watermark_text: str) -> bytes:
+    """Filigrane une image **déjà encodée** et la ré-encode en WebP.
+
+    Sert la piste retenue en revue J1 pour J3 (voir `build_thumb`) : la vignette stockée
+    reste propre — pHash et netteté sont calculés dessus et une texture répétée les
+    fausserait — et le filigrane n'est appliqué qu'à la copie réellement transmise à un
+    client externe. Fait à la volée plutôt que stocké : une variante de plus par média
+    coûterait du stockage et une étape de pipeline pour une image qui n'est demandée que
+    pendant les quelques jours de vie d'un lien de partage.
+
+    Ne masque aucune erreur : une image illisible remonte l'exception de Pillow à
+    l'appelant, à qui il revient de décider quoi répondre.
+    """
+    with Image.open(io.BytesIO(data)) as source:
+        return _to_webp(apply_watermark(source, watermark_text))

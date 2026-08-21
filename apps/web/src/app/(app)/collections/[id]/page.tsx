@@ -6,6 +6,7 @@ import * as mediaApi from "@/lib/api/resources/media";
 import type { CollectionOut, MediaSummary } from "@/lib/api/types";
 import { friendlyErrorMessage } from "@/lib/api/errors";
 import { COLLECTION_STATUS_LABELS } from "@/lib/labels";
+import Link from "next/link";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -115,7 +116,13 @@ export default function CollectionDetailPage({ params }: { params: Promise<{ id:
               <Button onClick={() => setConfirmPublish(true)} disabled={items.length === 0}>
                 Publier
               </Button>
-            ) : null}
+            ) : (
+              // Le partage n'a de sens qu'une fois la collection publiée : un lien vers une
+              // collection encore en composition montrerait au client un travail inachevé.
+              <Link href={`/collections/${collectionId}/share`}>
+                <Button variant="secondary">Partager</Button>
+              </Link>
+            )}
           </>
         }
       />
@@ -123,7 +130,7 @@ export default function CollectionDetailPage({ params }: { params: Promise<{ id:
       {confirmPublish ? (
         <Notice tone="warn">
           <p className="mb-2">
-            Publier rendra cette collection consultable côté client (jalon suivant). {items.length} média
+            Publier rendra cette collection partageable avec le client. {items.length} média
             {items.length > 1 ? "s" : ""} seront inclus. Confirmer ?
           </p>
           <div className="flex gap-2">
