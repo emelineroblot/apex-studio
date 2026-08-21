@@ -4072,6 +4072,7 @@
           "sharing"
         ],
         "summary": "Suivi de livraison",
+        "description": "Vue studio de la preparation. Le champ `error` est ce qui rend une livraison\nechouee actionnable : sans lui, il ne resterait qu'un statut rouge sans cause.",
         "operationId": "get_delivery_api_v1_deliveries__delivery_id__get",
         "security": [
           {
@@ -4612,6 +4613,7 @@
           "public"
         ],
         "summary": "Flux ZIP — `403` si sélection non validée ou livraison non prête",
+        "description": "Le seul chemin par lequel un fichier haute definition quitte le studio.\n\nLe controle d'acces HD (§3-H.3) est reevalue **ici**, juste avant d'ouvrir le flux, et\npas seulement au moment de la validation : selection validee **et** livraison prete.",
         "operationId": "get_public_delivery_archive_api_v1_public_delivery_archive_get",
         "responses": {
           "200": {

@@ -17,34 +17,43 @@ sélection (§3-H.3, §3-M).
 
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import exists, func, select
+from sqlalchemy import delete, exists, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from apex.config import settings
 from apex.db import get_db
-from apex.models.billing import ClientSelection, SelectionItem
+from apex.models.billing import ClientSelection, Delivery, SelectionItem
+from apex.models.catalog import Client
 from apex.models.collection import Collection, CollectionItem
 from apex.models.media import Media
 from apex.models.search import MediaSearch
 from apex.pipeline.derivatives import watermark_encoded_image
-from apex.routers._common import not_implemented
+from apex.queue.enqueue import enqueue
+from apex.schemas.billing import SelectionStatus
 from apex.schemas.public import (
+    DeliveryReadiness,
     PublicCollectionRef,
     PublicCollectionResponse,
+    PublicDeliveryRef,
     PublicDeliveryStatusResponse,
     PublicMediaItem,
     PublicSelectionItemResponse,
     PublicSelectionItemUpdate,
     PublicSelectionResponse,
+    PublicSelectionSummaryItem,
     PublicSelectionValidateResponse,
     PublicSessionRequest,
     PublicSessionResponse,
 )
 from apex.security import ClientScope, CurrentClient, create_client_session_token
+from apex.services import delivery as delivery_service
 from apex.services import sharing
 from apex.services.pagination import paginate_by_id
 from apex.services.storage import ObjectNotFoundError, get_storage_client
@@ -108,6 +117,54 @@ def _selection(db: Session, collection_id: int) -> ClientSelection | None:
     return db.execute(
         select(ClientSelection).where(ClientSelection.collection_id == collection_id)
     ).scalar_one_or_none()
+
+
+def _get_or_create_selection(db: Session, collection_id: int) -> ClientSelection:
+    """La sélection naît au premier clic, pas à la création de la collection.
+
+    Une ligne créée d'avance rendrait indiscernables « le client n'a pas encore ouvert la
+    galerie » et « le client a tout décoché », deux situations que le studio doit
+    distinguer pour savoir s'il faut relancer.
+    """
+    selection = _selection(db, collection_id)
+    if selection is None:
+        selection = ClientSelection(collection_id=collection_id, status="open")
+        db.add(selection)
+        db.flush()
+    return selection
+
+
+def _assert_selection_open(selection: ClientSelection) -> None:
+    """Une sélection validée est **définitive** : elle a déclenché la préparation de la
+    livraison et alimenté une facture brouillon. La rouvrir en silence désynchroniserait
+    les trois. L'écran client prévient de cette irréversibilité avant de valider."""
+    if selection.status == "validated":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "selection_validated",
+                "message": "Votre sélection a été validée : elle ne peut plus être modifiée.",
+                "detail": None,
+            },
+        )
+
+
+def _delivery(db: Session, collection_id: int) -> Delivery | None:
+    selection = _selection(db, collection_id)
+    if selection is None:
+        return None
+    return db.execute(
+        select(Delivery).where(Delivery.selection_id == selection.id)
+    ).scalar_one_or_none()
+
+
+def _delivery_forbidden(message: str) -> HTTPException:
+    """`403` et non `404` : la ressource existe et le client y a droit — plus tard. Lui
+    repondre « introuvable » l'enverrait chercher une erreur qui n'existe pas."""
+    return HTTPException(
+        status_code=403,
+        detail={"code": "delivery_not_ready", "message": message, "detail": None},
+    )
 
 
 @router.post(
@@ -311,9 +368,29 @@ def public_media_thumb(
     summary="Sélectionner / commenter une photo — `409` si la sélection est déjà validée",
 )
 def put_selection_item(
-    media_id: int, payload: PublicSelectionItemUpdate, scope: CurrentClient
+    media_id: int,
+    payload: PublicSelectionItemUpdate,
+    scope: CurrentClient,
+    db: Session = Depends(get_db),
 ) -> PublicSelectionItemResponse:
-    not_implemented("PUT /public/selection/items/{media_id}")
+    _assert_in_scope(db, scope, media_id)
+    selection = _get_or_create_selection(db, scope.collection_id)
+    _assert_selection_open(selection)
+
+    # Idempotent (§3-E.6, même principe que la file) : re-cocher une photo déjà cochée met
+    # à jour son commentaire sans dupliquer la ligne. L'UI enregistre de façon optimiste et
+    # peut légitimement rejouer une requête.
+    comment = (payload.comment or "").strip() or None
+    db.execute(
+        pg_insert(SelectionItem)
+        .values(selection_id=selection.id, media_id=media_id, comment=comment)
+        .on_conflict_do_update(
+            index_elements=[SelectionItem.selection_id, SelectionItem.media_id],
+            set_={"comment": comment},
+        )
+    )
+    db.commit()
+    return PublicSelectionItemResponse(selected=True, comment=comment)
 
 
 @router.delete(
@@ -321,8 +398,22 @@ def put_selection_item(
     status_code=204,
     summary="Retirer une photo de la sélection",
 )
-def delete_selection_item(media_id: int, scope: CurrentClient) -> None:
-    not_implemented("DELETE /public/selection/items/{media_id}")
+def delete_selection_item(
+    media_id: int, scope: CurrentClient, db: Session = Depends(get_db)
+) -> None:
+    _assert_in_scope(db, scope, media_id)
+    selection = _selection(db, scope.collection_id)
+    if selection is None:
+        # Rien à retirer d'une sélection qui n'existe pas encore : `204`, pas `404`. Le
+        # client a décoché une photo qu'il n'avait jamais cochée — l'état voulu est atteint.
+        return
+    _assert_selection_open(selection)
+    db.execute(
+        delete(SelectionItem).where(
+            SelectionItem.selection_id == selection.id, SelectionItem.media_id == media_id
+        )
+    )
+    db.commit()
 
 
 @router.get(
@@ -330,8 +421,24 @@ def delete_selection_item(media_id: int, scope: CurrentClient) -> None:
     response_model=PublicSelectionResponse,
     summary="Sélection courante",
 )
-def get_public_selection(scope: CurrentClient) -> PublicSelectionResponse:
-    not_implemented("GET /public/selection")
+def get_public_selection(
+    scope: CurrentClient, db: Session = Depends(get_db)
+) -> PublicSelectionResponse:
+    selection = _selection(db, scope.collection_id)
+    if selection is None:
+        return PublicSelectionResponse(status="open", count=0, items=[])
+    rows = db.execute(
+        select(SelectionItem.media_id, SelectionItem.comment)
+        .where(SelectionItem.selection_id == selection.id)
+        .order_by(SelectionItem.media_id)
+    ).all()
+    return PublicSelectionResponse(
+        status=cast(SelectionStatus, selection.status),
+        count=len(rows),
+        items=[
+            PublicSelectionSummaryItem(media_id=row.media_id, comment=row.comment) for row in rows
+        ],
+    )
 
 
 @router.post(
@@ -339,8 +446,74 @@ def get_public_selection(scope: CurrentClient) -> PublicSelectionResponse:
     response_model=PublicSelectionValidateResponse,
     summary="Valider la sélection — déclenche `build_delivery` et `refresh_draft_invoice`",
 )
-def validate_selection(scope: CurrentClient) -> PublicSelectionValidateResponse:
-    not_implemented("POST /public/selection/validate")
+def validate_selection(
+    scope: CurrentClient, db: Session = Depends(get_db)
+) -> PublicSelectionValidateResponse:
+    selection = _selection(db, scope.collection_id)
+    count = (
+        0
+        if selection is None
+        else int(
+            db.execute(
+                select(func.count())
+                .select_from(SelectionItem)
+                .where(SelectionItem.selection_id == selection.id)
+            ).scalar_one()
+        )
+    )
+    if selection is None or count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "empty_selection",
+                "message": "Choisissez au moins une photo avant de valider.",
+                "detail": None,
+            },
+        )
+
+    existing = db.execute(
+        select(Delivery).where(Delivery.selection_id == selection.id)
+    ).scalar_one_or_none()
+    if selection.status == "validated" and existing is not None:
+        # Idempotent : revalider (double clic, retour arrière du navigateur, requête
+        # rejouée) renvoie la livraison deja lancee. Creer une seconde livraison pour la
+        # meme selection produirait deux archives et deux factures pour un seul achat.
+        return PublicSelectionValidateResponse(
+            delivery=PublicDeliveryRef(
+                id=existing.id, status=cast(DeliveryReadiness, existing.status)
+            )
+        )
+
+    selection.status = "validated"
+    selection.validated_at = datetime.now(UTC)
+    delivery = existing or Delivery(
+        collection_id=scope.collection_id, selection_id=selection.id, status="pending"
+    )
+    db.add(delivery)
+    db.flush()
+
+    # Les deux travaux passent par la file, jamais en synchrone : la validation doit
+    # repondre immediatement au client, et ni la preparation de l'archive ni la facture ne
+    # doivent pouvoir la faire echouer sous ses yeux. `dedupe_key` garantit qu'un double
+    # clic ne met pas deux fois le meme travail en file (§3-E.4).
+    enqueue(
+        db,
+        "build_delivery",
+        {"delivery_id": delivery.id},
+        dedupe_key=f"delivery:{delivery.id}",
+        priority=50,
+    )
+    enqueue(
+        db,
+        "refresh_draft_invoice",
+        {"selection_id": selection.id},
+        dedupe_key=f"invoice:{selection.id}",
+        priority=120,
+    )
+    db.commit()
+    return PublicSelectionValidateResponse(
+        delivery=PublicDeliveryRef(id=delivery.id, status=cast(DeliveryReadiness, delivery.status))
+    )
 
 
 @router.get(
@@ -348,13 +521,68 @@ def validate_selection(scope: CurrentClient) -> PublicSelectionValidateResponse:
     response_model=PublicDeliveryStatusResponse,
     summary="État de la préparation de livraison",
 )
-def get_public_delivery(scope: CurrentClient) -> PublicDeliveryStatusResponse:
-    not_implemented("GET /public/delivery")
+def get_public_delivery(
+    scope: CurrentClient, db: Session = Depends(get_db)
+) -> PublicDeliveryStatusResponse:
+    delivery = _delivery(db, scope.collection_id)
+    if delivery is None:
+        # Rien n'a encore ete valide : un etat d'attente, pas une absence de ressource —
+        # l'ecran client affiche « en attente de votre validation », jamais une erreur.
+        return PublicDeliveryStatusResponse(
+            status="pending", item_count=None, byte_size=None, ready=False
+        )
+    return PublicDeliveryStatusResponse(
+        status=cast(DeliveryReadiness, delivery.status),
+        item_count=delivery.item_count,
+        byte_size=delivery.byte_size,
+        ready=delivery.status == "ready",
+    )
 
 
 @router.get(
     "/delivery/archive",
     summary="Flux ZIP — `403` si sélection non validée ou livraison non prête",
 )
-def get_public_delivery_archive(scope: CurrentClient) -> StreamingResponse:
-    not_implemented("GET /public/delivery/archive")
+def get_public_delivery_archive(
+    scope: CurrentClient, db: Session = Depends(get_db)
+) -> StreamingResponse:
+    """Le seul chemin par lequel un fichier haute definition quitte le studio.
+
+    Le controle d'acces HD (§3-H.3) est reevalue **ici**, juste avant d'ouvrir le flux, et
+    pas seulement au moment de la validation : selection validee **et** livraison prete.
+    """
+    selection = _selection(db, scope.collection_id)
+    delivery = _delivery(db, scope.collection_id)
+    if selection is None or selection.status != "validated" or delivery is None:
+        raise _delivery_forbidden("Votre selection n'a pas encore ete validee.")
+    if delivery.status != "ready":
+        raise _delivery_forbidden("Votre livraison est encore en preparation.")
+
+    collection = _get_collection(db, scope)
+    client = db.get(Client, collection.client_id)
+    filename = delivery_service.archive_filename(
+        client.name if client else "client", collection.title
+    )
+    storage = get_storage_client()
+
+    if delivery.storage_key is not None:
+        # Grosse collection : l'archive a ete construite une fois par le worker.
+        body = storage.open_stream(delivery.storage_key)
+        chunks: Iterator[bytes] = body.chunks
+        content_length = body.content_length
+    else:
+        stream = delivery_service.build_zip_stream(db, storage, selection.id)
+        chunks = iter(stream)
+        # `ZIP_STORED` permet d'annoncer la taille exacte avant d'avoir produit un octet :
+        # le navigateur affiche une vraie progression au lieu d'un compteur qui tourne.
+        content_length = len(stream)
+
+    disposition = 'attachment; filename="' + filename + '"'
+    return StreamingResponse(
+        chunks,
+        media_type="application/zip",
+        headers={
+            "Content-Length": str(content_length),
+            "Content-Disposition": disposition,
+        },
+    )

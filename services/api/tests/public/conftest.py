@@ -37,6 +37,12 @@ def _webp_bytes(color: tuple[int, int, int], size: tuple[int, int]) -> bytes:
     return buffer.getvalue()
 
 
+def _jpeg_bytes(color: tuple[int, int, int], size: tuple[int, int] = (800, 533)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="JPEG", quality=85)
+    return buffer.getvalue()
+
+
 @pytest.fixture
 def shared_collection(db_session: Session) -> dict:
     owner = make_user(db_session, role="owner", email="owner-public@apex-test.dev")
@@ -65,10 +71,15 @@ def shared_collection(db_session: Session) -> dict:
         )
         thumb_key = f"thumb/test-public-{media.id}.webp"
         preview_key = f"preview/test-public-{media.id}.webp"
+        hd_key = f"hd/test-public-{media.id}.jpg"
         storage.put_bytes(thumb_key, _webp_bytes((30, 60 + index * 20, 120), (320, 213)))
         storage.put_bytes(preview_key, _webp_bytes((30, 60 + index * 20, 120), (1600, 1067)))
+        # Le HD est un vrai fichier : la livraison mesure sa taille avant de se declarer
+        # prete, et l'archive le lit reellement.
+        storage.put_bytes(hd_key, _jpeg_bytes((200, 40 + index * 30, 30)))
         media.storage_key_thumb = thumb_key
         media.storage_key_preview = preview_key
+        media.storage_key_hd = hd_key
         media.content_hash = bytes([index]) * 32
         media_ids.append(media.id)
 

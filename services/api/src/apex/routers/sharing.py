@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, Security
 from sqlalchemy.orm import Session
 
 from apex.db import get_db
-from apex.models.billing import ShareLink
-from apex.routers._common import bearer_scheme, not_implemented
+from apex.models.billing import Delivery, ShareLink
+from apex.routers._common import bearer_scheme
 from apex.schemas.billing import DeliveryOut
 from apex.security import CurrentUser
 from apex.services import access
@@ -40,5 +40,13 @@ def revoke_share_link(
 
 
 @router.get("/deliveries/{delivery_id}", response_model=DeliveryOut, summary="Suivi de livraison")
-def get_delivery(delivery_id: int) -> DeliveryOut:
-    not_implemented("GET /deliveries/{id}")
+def get_delivery(delivery_id: int, user: CurrentUser, db: Session = Depends(get_db)) -> DeliveryOut:
+    """Vue studio de la preparation. Le champ `error` est ce qui rend une livraison
+    echouee actionnable : sans lui, il ne resterait qu'un statut rouge sans cause."""
+    delivery = db.get(Delivery, delivery_id)
+    if delivery is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "not_found", "message": "Livraison introuvable.", "detail": None},
+        )
+    return DeliveryOut.model_validate(delivery)

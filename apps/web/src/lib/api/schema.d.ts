@@ -990,7 +990,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Suivi de livraison */
+        /**
+         * Suivi de livraison
+         * @description Vue studio de la preparation. Le champ `error` est ce qui rend une livraison
+         *     echouee actionnable : sans lui, il ne resterait qu'un statut rouge sans cause.
+         */
         get: operations["get_delivery_api_v1_deliveries__delivery_id__get"];
         put?: never;
         post?: never;
@@ -1178,7 +1182,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Flux ZIP — `403` si sélection non validée ou livraison non prête */
+        /**
+         * Flux ZIP — `403` si sélection non validée ou livraison non prête
+         * @description Le seul chemin par lequel un fichier haute definition quitte le studio.
+         *
+         *     Le controle d'acces HD (§3-H.3) est reevalue **ici**, juste avant d'ouvrir le flux, et
+         *     pas seulement au moment de la validation : selection validee **et** livraison prete.
+         */
         get: operations["get_public_delivery_archive_api_v1_public_delivery_archive_get"];
         put?: never;
         post?: never;
