@@ -5,10 +5,7 @@
       "maxDuration": 300
     }
   },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api/index"
-    }
+  "regions": [
+    "fra1"
   ]
 }

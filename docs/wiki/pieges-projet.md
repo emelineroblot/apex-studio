@@ -172,6 +172,27 @@ projet de la même stack vivent dans la skill globale `stack-pitfalls`, pas ici.
   un cas nominal ; et surtout : **un garde-fou doit être rejoué après le changement qu'il est
   censé garder**, il fait partie du périmètre de ce changement, pas de son décor. *(2026-08-21)*
 
+- **Un motif de dossier non ancré dans `.vercelignore` s'applique à toute profondeur.**
+  `models/`, écrit pour exclure les poids OCR (`OCR_MODEL_DIR=./models`), a aussi supprimé
+  `src/apex/models/` du téléversement : l'application a démarré en production sur
+  `ModuleNotFoundError: No module named 'apex.models'`. Le `.gitignore` de ce dépôt portait
+  **déjà** la même mise en garde pour `demo-photos/`, et le piège a quand même été refait.
+  Tous les motifs de dossier y sont désormais ancrés (`/models/`), sauf ceux qui doivent
+  bien s'appliquer partout (`__pycache__/`). *(2026-08-21)*
+
+- **`alembic/env.py` écrit l'URL dans un `ConfigParser`, qui interprète `%`.** Un mot de
+  passe URL-encodé (`$` → `%24`, `!` → `%21` — le cas courant d'un mot de passe généré par
+  un hébergeur) fait échouer `alembic upgrade head` sur `ValueError: invalid interpolation
+  syntax`, avant même toute connexion. Doubler les `%` à l'écriture ; `ConfigParser` restitue
+  la valeur d'origine à la lecture. Invisible en développement, où toutes les URL du projet
+  sont en ASCII simple. *(2026-08-21)*
+
+- **Un `rewrite` Vercel remplace le chemin vu par l'application.** `"/api/(.*)"` →
+  `"/api/index"` fait recevoir `/api/index` à FastAPI, qui répond `404` sur toutes ses
+  routes. Le preset FastAPI de Vercel route déjà l'intégralité des requêtes vers l'objet
+  `app` en préservant le chemin : **ne rien déclarer** est la bonne configuration. Le motif
+  copié de Cardan ne s'applique pas ici — son backend n'utilise pas ce preset. *(2026-08-21)*
+
 - **Un test qui fabrique ses propres données ne teste pas les données de la démonstration.**
   Les 303 tests backend passaient, et pourtant aucune collection du jeu de démo n'était
   livrable : le générateur ne posait pas de `storage_key_hd`, quand chaque test, lui, en

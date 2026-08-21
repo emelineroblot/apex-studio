@@ -154,8 +154,12 @@ Voir `services/api/.env.example` pour la liste complète. Deux méritent une men
 
 ## Déploiement
 
-Deux projets Vercel (`apex-web` = `apps/web`, `apex-api` = `services/api`), une base Neon, un
-bucket R2, et l'OCR exécuté depuis un poste par `apex.cli worker --loop`. Procédure complète,
+Deux projets Vercel (`apex-web` = `apps/web`, `apex-api` = `services/api`) et **un projet
+Supabase** (PostgreSQL + Storage), comme Cardan. L'OCR est exécuté depuis un poste par
+`apex.cli worker --loop`, et la démonstration se remet à neuf à la main — **pas de cron**.
+
+Deux chaînes de connexion, jamais interchangeables : `DATABASE_URL` (Transaction pooler,
+6543) pour l'API, `DATABASE_URL_DIRECT` (Session pooler, 5432) pour Alembic. Procédure complète,
 variables et limites connues : **`docs/deploiement.md`**.
 
 ## Jalons

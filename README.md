@@ -60,8 +60,8 @@ qui rattachera automatiquement les photos du week-end.
 | Frontend | Next.js |
 | Base de données | PostgreSQL — recherche plein texte et facettes natives, pas de moteur externe |
 | Traitement asynchrone | Worker Python, file de tâches en table PostgreSQL (`SKIP LOCKED`) |
-| Stockage fichiers | Stockage objet compatible S3, hébergement UE |
-| Déploiement | Vercel, environnement de démonstration jetable |
+| Stockage fichiers | Supabase Storage (endpoint S3-compatible), région UE |
+| Déploiement | Deux projets Vercel + un projet Supabase, environnement jetable |
 
 Aucune intégration tierce : la démo ne peut pas tomber pour une raison qui ne la concerne pas.
 

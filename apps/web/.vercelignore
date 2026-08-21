@@ -1,0 +1,8 @@
+# La CLI téléverse le répertoire courant : sans ceci, `node_modules` et le build local
+# partent sur le réseau pour rien — Vercel les reconstruit de toute façon.
+# Motifs ancrés : voir la mise en garde de `services/api/.vercelignore`.
+/node_modules/
+/.next/
+/coverage/
+.env
+.env.*
